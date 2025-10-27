@@ -24,6 +24,9 @@ dist/
 # Kubernetes generated files
 toolhive-webhook/config/crd/bases/
 
+# Build artifacts and binaries
+kagenti-webhook/bin/
+
 # IDE
 .idea/
 .vscode/
