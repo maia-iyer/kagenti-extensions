@@ -1,6 +1,6 @@
 # Kagenti Webhook Architecture
 
-This document provides Mermaid diagrams illustrating the webhook architecture.
+This document provides Mermaid diagram illustrating the webhook architecture.
 
 ## Component Architecture
 

@@ -8,7 +8,7 @@ IMAGE_TAG ?= $(shell git rev-parse --short HEAD)
 ARCH ?= $(shell go env GOARCH)
 CLUSTER ?= agent-platform
 CONTEXT ?=
-NAMESPACE ?= kagenti-system
+NAMESPACE ?= kagenti-webhook-system
 HELM_OPTS ?= --set image.repository=$(KO_DOCKER_REPO)/$(CMD_NAME) --set image.tag=$(IMAGE_TAG) --set image.pullPolicy=IfNotPresent --set namespaceOverride=$(NAMESPACE) --set namespace.create=false --set image.command=/ko-app/cmd
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
@@ -132,10 +132,10 @@ PLATFORMS ?= linux/arm64,linux/amd64,linux/s390x,linux/ppc64le
 docker-buildx: ## Build and push docker image for the manager for cross-platform support
 	# copy existing Dockerfile and insert --platform=${BUILDPLATFORM} into Dockerfile.cross, and preserve the original Dockerfile
 	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile > Dockerfile.cross
-	- $(CONTAINER_TOOL) buildx create --name toolhive-webhook-builder
-	$(CONTAINER_TOOL) buildx use toolhive-webhook-builder
+	- $(CONTAINER_TOOL) buildx create --name kagenti-webhook-builder
+	$(CONTAINER_TOOL) buildx use kagenti-webhook-builder
 	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${IMG} -f Dockerfile.cross .
-	- $(CONTAINER_TOOL) buildx rm toolhive-webhook-builder
+	- $(CONTAINER_TOOL) buildx rm kagenti-webhook-builder
 	rm Dockerfile.cross
 
 .PHONY: build-installer
@@ -179,11 +179,11 @@ kind-load-image:
 
 .PHONY: install-local-chart
 install-local-chart: kind-load-image
-	if [ ! -n "$(CONTEXT)" ] ; then helm upgrade --install --create-namespace -n $(NAMESPACE) kagenti-webhook ../charts/kagenti-webhook ${HELM_OPTS} ; else helm --kube-context ${CONTEXT} upgrade --install --create-namespace -n $(NAMESPACE) toolhive-webhook ../charts/toolhive-webhook ${HELM_OPTS} ; fi
+	if [ ! -n "$(CONTEXT)" ] ; then helm upgrade --install --create-namespace -n $(NAMESPACE) kagenti-webhook ../charts/kagenti-webhook ${HELM_OPTS} ; else helm --kube-context ${CONTEXT} upgrade --install --create-namespace -n $(NAMESPACE) kagenti-webhook ../charts/kagenti-webhook ${HELM_OPTS} ; fi
 
 .PHONY: uninstall-local-chart
 uninstall-local-chart: ## Uninstall the local Helm chart
-	if [ ! -n "$(CONTEXT)" ] ; then helm uninstall kagenti-webhook -n $(NAMESPACE) ; else helm --kube-context ${CONTEXT} uninstall toolhive-webhook -n $(NAMESPACE) ; fi
+	if [ ! -n "$(CONTEXT)" ] ; then helm uninstall kagenti-webhook -n $(NAMESPACE) ; else helm --kube-context ${CONTEXT} uninstall kagenti-webhook -n $(NAMESPACE) ; fi
 
 .PHONY: reinstall-local-chart
 reinstall-local-chart: uninstall-local-chart install-local-chart ## Uninstall and reinstall the local Helm chart
