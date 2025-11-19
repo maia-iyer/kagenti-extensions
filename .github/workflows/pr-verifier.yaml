@@ -1,18 +1,21 @@
 name: PR Verifier
 
 on:
-  pull_request:
+  pull_request_target:
     branches:
       - main
       - "release-*"
+
+permissions:
+  pull-requests: read
+  statuses: write
+  contents: read
 
 jobs:
   verify-pr:
     runs-on: ubuntu-latest
     name: Verify PR
     steps:
-      - uses: actions/checkout@v5
-
       - name: Verify PR title
         uses: amannn/action-semantic-pull-request@v5
         env:
