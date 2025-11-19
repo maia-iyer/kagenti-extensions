@@ -60,5 +60,5 @@ jobs:
           chartPackageName="kagenti-webhook-chart--${chartVersion}.tgz"
           cd ${{ env.CHARTS_PATH }}/kagenti-webhook
           sed -i "s/__PLACEHOLDER__/${chartVersion}/g" values.yaml
-          helm package . --destination . --version ${chartVersion} --app-version ${chartVersion} --name-template "webhook-chart"
+          helm package . --destination . --version ${chartVersion} --app-version ${chartVersion}
           helm push "./${chartPackageName}" oci://${{ env.REGISTRY }}/${{ env.REPO }}
