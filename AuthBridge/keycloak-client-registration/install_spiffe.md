@@ -40,6 +40,7 @@ kubectl apply -f "https://raw.githubusercontent.com/kagenti/kagenti/refs/heads/m
 ### 6. Port Forward Keycloak
 
 ```bash
+kubectl rollout status statefulset/keycloak -n keycloak --timeout=120s
 kubectl port-forward service/keycloak -n keycloak 8080:8080
 ```
 
@@ -56,10 +57,10 @@ Password: admin
 Edit `example_deployment_spiffe.yaml`:
 
 Add your own container image by replacing placeholders:
-    - `{{ COMPONENT_NAME }}`
-    - `{{ IMAGE_REGISTRY }}`
-    - `{{ IMAGE_NAME }}`
-    - `{{ IMAGE_TAG }}`
+    - `COMPONENT_NAME`
+    - `IMAGE_REGISTRY`
+    - `IMAGE_NAME`
+    - `IMAGE_TAG`
 
 Apply the deployment:
 
@@ -69,11 +70,14 @@ kubectl apply -f example_deployment_spiffe.yaml
 
 ### 8. Verify Client Registration in Keycloak
 
-- Log in to Keycloak.
-- Navigate to **Clients**.
-- Confirm:
-  - **Client ID** = SPIFFE ID
-  - **Name** = `COMPONENT_NAME`
+Wait for the client registration to complete.
+
+```bash
+kubectl wait --for=condition=available --timeout=120s deployment/COMPONENT_NAME
+```
+Log in to Keycloak and navigate to [Clients](http://keycloak.localtest.me:8080/admin/master/console/#/master/clients).
+
+Confirm a new client has been created; `Client ID` should be a SPIFFE ID and `Name` should be `COMPONENT_NAME`.
 
 ### ✅ Architecture Diagram
 
