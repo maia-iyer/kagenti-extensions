@@ -2,13 +2,13 @@
 
 This document gives a step-by-step tutorial of getting started with the AuthProxy in a local Kind cluster. 
 
-The final architecture deployed is as follows: `CURL command -> AuthProxy -> Target`
+The final architecture deployed is as follows: `CURL command -> AuthProxy -> Demo App`
 
-The Target is a demo target application. The AuthProxy will validate bearer tokens in incoming requests and exchange them for the Target. 
+The Demo App is a demo application used for testing. The AuthProxy will validate bearer tokens in incoming requests and exchange them for the Demo App. 
 
 The demo goes as follows:
 1. Install Kagenti
-1. Build and deploy the Target and AuthProxy
+1. Build and deploy the Demo App and AuthProxy
 1. Configure Keycloak
 1. Test the flow
 
@@ -19,7 +19,7 @@ This should start a local Kind cluster named `kagenti`.
 
 The key component is Keycloak which has been deployed to the `keycloak` namespace and exposed as `keycloak-service`. 
 
-## Step 2: Build and deploy the Target and AuthProxy
+## Step 2: Build and deploy the Demo App and AuthProxy
 
 Let's clone the assets locally:
 
@@ -63,7 +63,7 @@ First let's get the client secret:
 First, let's obtain an initial access token using the following command: 
 
 ```
-export ACCESS_TOKEN=$(curl -sX POST -H "Content-Type: application/x-www-form-urlencoded" -d "client_secret=q0NhCIf0ClXSuuEfbonQyZaLoXQ1EL1P" -d "grant_type=password" -d "client_id=auth-proxy-caller" -d "username=admin" -d "password=admin" "http://keycloak.localtest.me:8080/realms/master/protocol/openid-connect/token" | jq -r ‘.access_token')
+export ACCESS_TOKEN=$(curl -sX POST -H "Content-Type: application/x-www-form-urlencoded" -d "client_secret=$CLIENT_SECRET" -d "grant_type=password" -d "client_id=auth-proxy-caller" -d "username=admin" -d "password=admin" "http://keycloak.localtest.me:8080/realms/master/protocol/openid-connect/token" | jq -r ‘.access_token')
 ```
 
 Now we can access the application. Run:
@@ -90,9 +90,9 @@ curl http://localhost:9090/test
 
 When deployed to Kubernetes, you can test the services internally:
 
-**Test target service directly:**
+**Test demo app directly:**
 ```bash
-kubectl run test-pod --image=curlimages/curl --rm -it --restart=Never -- curl -H "Authorization: Bearer $ACCESS_TOKEN" http://auth-target-service:8081/test
+kubectl run test-pod --image=curlimages/curl --rm -it --restart=Never -- curl -H "Authorization: Bearer $ACCESS_TOKEN" http://demo-app-service:8081/test
 ```
 
 **View logs:**
@@ -100,8 +100,8 @@ kubectl run test-pod --image=curlimages/curl --rm -it --restart=Never -- curl -H
 # Auth proxy logs
 kubectl logs deployment/auth-proxy
 
-# Target service logs
-kubectl logs deployment/auth-target
+# Demo app logs
+kubectl logs deployment/demo-app
 
 # Follow logs in real-time
 kubectl logs -f deployment/auth-proxy
@@ -117,7 +117,7 @@ kubectl get svc
 
 # Describe deployments
 kubectl describe deployment auth-proxy
-kubectl describe deployment auth-target
+kubectl describe deployment demo-app
 ```
 
 ## Clean Up

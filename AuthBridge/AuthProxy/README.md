@@ -3,7 +3,7 @@
 A Go application that provides authentication proxy functionality with two services:
 
 1. **Auth Proxy** (port 8080) - Receives HTTP traffic and checks for "kagenti" authorization
-2. **Target Service** (port 8081) - Validates "kagenti_new" authorization and responds accordingly
+2. **Demo App** (port 8081) - A demo application that validates "kagenti_new" authorization and responds accordingly
 
 ## Deployment
 
@@ -49,9 +49,9 @@ curl http://localhost:8080/test
 
 When deployed to Kubernetes, you can test the services internally:
 
-**Test target service directly:**
+**Test demo app directly:**
 ```bash
-kubectl run test-pod --image=curlimages/curl --rm -it --restart=Never -- curl -H "Authorization: Bearer $ACCESS_TOKEN" http://auth-target-service:8081/test
+kubectl run test-pod --image=curlimages/curl --rm -it --restart=Never -- curl -H "Authorization: Bearer $ACCESS_TOKEN" http://demo-app-service:8081/test
 ```
 
 **View logs:**
@@ -59,8 +59,8 @@ kubectl run test-pod --image=curlimages/curl --rm -it --restart=Never -- curl -H
 # Auth proxy logs
 kubectl logs deployment/auth-proxy
 
-# Target service logs
-kubectl logs deployment/auth-target
+# Demo app logs
+kubectl logs deployment/demo-app
 
 # Follow logs in real-time
 kubectl logs -f deployment/auth-proxy
@@ -76,7 +76,7 @@ kubectl get svc
 
 # Describe deployments
 kubectl describe deployment auth-proxy
-kubectl describe deployment auth-target
+kubectl describe deployment demo-app
 ```
 
 ## Clean Up
@@ -95,19 +95,19 @@ make kind-delete
 
 1. Client sends request to auth proxy (port 8080) with `Authorization: kagenti`
 2. Proxy validates the authorization header
-3. If valid, proxy forwards the request to target service (port 8081) with `Authorization: kagenti_new`
-4. Target service validates the new authorization header and responds with "authorized" or "unauthorized"
-5. Proxy returns the target service's response to the client
+3. If valid, proxy forwards the request to demo app (port 8081) with `Authorization: kagenti_new`
+4. Demo app validates the new authorization header and responds with "authorized" or "unauthorized"
+5. Proxy returns the demo app's response to the client
 
 ## Architecture
 
 ```
-Client → Auth Proxy (token) → Target Service (token) → Response
+Client → Auth Proxy (token) → Demo App (token) → Response
          Port 8080            Port 8081
 ```
 
 In Kubernetes:
 ```
-Client → auth-proxy-service:8080 → auth-target-service:8081 → Response
+Client → auth-proxy-service:8080 → demo-app-service:8081 → Response
          (NodePort 30080)          (ClusterIP)
 ```

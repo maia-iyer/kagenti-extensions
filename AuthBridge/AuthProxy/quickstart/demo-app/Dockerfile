@@ -2,8 +2,8 @@ FROM golang:1.23-alpine AS builder
 
 WORKDIR /app
 
-# Initialize go module for target service
-RUN go mod init target-service
+# Initialize go module for demo app
+RUN go mod init demo-app
 
 # Copy source code first to analyze dependencies
 COPY main.go .
