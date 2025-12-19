@@ -21,8 +21,8 @@ jobs:
       matrix:
         image_config:
           - name: client-registration
-            path: ./AuthBridge/client-registration
-
+            path: ./AuthBridge
+            
     steps:
       # 1. Checkout code
       - name: Checkout repository

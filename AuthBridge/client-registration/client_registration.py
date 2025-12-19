@@ -9,6 +9,7 @@ Idempotent:
 """
 
 import os
+from typing import Any
 import jwt
 from keycloak import KeycloakAdmin, KeycloakPostError
 
@@ -53,7 +54,7 @@ def write_client_secret(
 
 
 # TODO: refactor this function so kagenti-client-registration image can use it
-def register_client(keycloak_admin: KeycloakAdmin, client_id: str, client_payload):
+def register_client(keycloak_admin: KeycloakAdmin, client_id: str, client_payload: dict[str, Any]) -> str:
     """
     Ensure a Keycloak client exists.
     Returns the internal client ID.
@@ -64,7 +65,6 @@ def register_client(keycloak_admin: KeycloakAdmin, client_id: str, client_payloa
         return internal_client_id
 
     # Create client
-    internal_client_id = None
     try:
         internal_client_id = keycloak_admin.create_client(client_payload)
 
@@ -81,6 +81,7 @@ def get_client_id() -> str:
     """
     # Read SVID JWT from file to get client ID
     jwt_file_path = "/opt/jwt_svid.token"
+    content = None
     try:
         with open(jwt_file_path, "r") as file:
             content = file.read()
@@ -93,6 +94,7 @@ def get_client_id() -> str:
     if content is None or content.strip() == "":
         raise Exception("No content read from SVID JWT.")
 
+    # Decode JWT to get client ID
     decoded = jwt.decode(content, options={"verify_signature": False})
     if "sub" not in decoded:
         raise Exception('SVID JWT does not contain a "sub" claim.')
