@@ -94,13 +94,13 @@ func BuildClientRegistrationContainer(clientID, name, namespace string) corev1.C
 		},
 		Env: []corev1.EnvVar{
 			{
-				Name: "SPIFFE_ENABLED",
+				Name: "SPIRE_ENABLED",
 				ValueFrom: &corev1.EnvVarSource{
 					ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
 						LocalObjectReference: corev1.LocalObjectReference{
 							Name: "environments",
 						},
-						Key: "SPIFFE_ENABLED",
+						Key: "SPIRE_ENABLED",
 					},
 				},
 			},

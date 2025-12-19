@@ -4,7 +4,7 @@ kind: ConfigMap
 metadata:
   name: environments
 data:
-  SPIFFE_ENABLED: "false"
+  SPIRE_ENABLED: "false"
   # Replace these placeholder values with real endpoints/credentials
   KEYCLOAK_URL: "http://keycloak.keycloak.svc:8080"
   KEYCLOAK_REALM: "master"
@@ -45,10 +45,10 @@ spec:
               python client_registration.py;
               tail -f /dev/null
           env:
-            - name: SPIFFE_ENABLED
+            - name: SPIRE_ENABLED
               configMapKeyRef:
                 name: environments
-                key: SPIFFE_ENABLED
+                key: SPIRE_ENABLED
             - name: KEYCLOAK_URL
               valueFrom:
                 configMapKeyRef:

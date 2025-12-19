@@ -104,7 +104,7 @@ client_name = get_env_var("CLIENT_NAME")
 
 # If SPIFFE is enabled, use the client ID from the SVID JWT.
 # Otherwise, use the client name as the client ID.
-if get_env_var("SPIFFE_ENABLED", "false").lower() == "true":
+if get_env_var("SPIRE_ENABLED", "false").lower() == "true":
     client_id = get_client_id()
 else:
     client_id = client_name
