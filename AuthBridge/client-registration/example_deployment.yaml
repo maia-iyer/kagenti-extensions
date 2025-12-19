@@ -33,8 +33,8 @@ spec:
           volumeMounts:
             - name: shared-data
               mountPath: /shared
-        - name: kagenti-client-registration
-          image: ghcr.io/kagenti/kagenti/client-registration:latest
+        - name: client-registration
+          image: ghcr.io/kagenti/kagenti-extensions/client-registration:latest
           command:
             - /bin/sh
             - -c

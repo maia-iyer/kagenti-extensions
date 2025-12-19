@@ -152,7 +152,7 @@ The webhook injects two sidecar containers into every Agent and MCPServer:
 
 #### 2. Client Registration (`kagenti-client-registration`)
 
-- **Image**: `ghcr.io/kagenti/kagenti/client-registration:latest`
+- **Image**: `ghcr.io/kagenti/kagenti-extensions/client-registration:latest`
 - **Purpose**: Registers resource as Keycloak OAuth2 client using SPIFFE identity
 - **Resources**: 50m CPU / 64Mi memory (request), 100m CPU / 128Mi memory (limit)
 - **Behavior**: Waits for `/opt/jwt_svid.token`, then registers with Keycloak

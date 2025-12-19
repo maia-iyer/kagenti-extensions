@@ -47,7 +47,7 @@ spec:
             - name: svid-output
               mountPath: /opt
         - name: client-registration
-          image: ghcr.io/kagenti/kagenti/client-registration:latest
+          image: ghcr.io/kagenti/kagenti-extensions/client-registration:latest
           command:
             - /bin/sh
             - -c
