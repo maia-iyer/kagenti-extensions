@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	defaultTargetServiceURL = "http://auth-target-service:8081"
+	defaultTargetServiceURL = "http://demo-app-service:8081"
 	proxyPort               = "0.0.0.0:8080"
 )
 

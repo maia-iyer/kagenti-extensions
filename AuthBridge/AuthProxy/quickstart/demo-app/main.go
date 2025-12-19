@@ -42,7 +42,7 @@ func main() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		authHandler(w, r, jwksURL, issuer, audience)
 	})
-	log.Printf("Target service starting on port %s", targetPort)
+	log.Printf("Demo app starting on port %s", targetPort)
 	log.Printf("JWKS URL: %s", jwksURL)
 	log.Printf("Expected issuer: %s", issuer)
 	log.Printf("Expected audience: %s", audience)
