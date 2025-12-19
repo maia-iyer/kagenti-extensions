@@ -76,35 +76,30 @@ Wait for the client registration to complete.
 ```bash
 kubectl wait --for=condition=available --timeout=120s deployment/my-app
 ```
+
 Log in to Keycloak and navigate to [Clients](http://keycloak.localtest.me:8080/admin/master/console/#/master/clients).
 
 Confirm a new client has been created; `Client ID` should be a SPIFFE ID and `Name` should be `my-app`.
 
-![`my-app` client](images/my-app_client.png)
+![`my-app` client](images/clients_with_spire.png)
 
 ## Client Registration without SPIRE
 
-This guide walks you through installing Gateway API and Keycloak, and deploying a workload that uses automated client registration without SPIRE/SPIFFE.
+This guide walks you through installing Keycloak and deploying a workload that uses automated client registration without SPIRE/SPIFFE.
 
-### 3. Install Gateway API CRDs
-
-```bash
-kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/standard-install.yaml
-```
-
-### 4. Create Keycloak Namespace
+### 1. Create Keycloak Namespace
 
 ```bash
 kubectl apply -f "https://raw.githubusercontent.com/kagenti/kagenti/refs/heads/main/kagenti/installer/app/resources/keycloak-namespace.yaml"
 ```
 
-### 5. Deploy Keycloak with Postgres
+### 2. Deploy Keycloak with Postgres
 
 ```bash
 kubectl apply -f "https://raw.githubusercontent.com/kagenti/kagenti/refs/heads/main/kagenti/installer/app/resources/keycloak.yaml" -n keycloak
 ```
 
-### 6. Port Forward Keycloak
+### 3. Port Forward Keycloak
 
 ```bash
 kubectl rollout status statefulset/keycloak -n keycloak --timeout=120s
@@ -119,7 +114,7 @@ Username: admin
 Password: admin
 ```
 
-### 7. Configure Your Deployment
+### 4. Configure Your Deployment
 
 Apply the example deployment:
 
@@ -129,15 +124,16 @@ kubectl apply -f example_deployment.yaml
 
 The example deployment, name `my-app`, will run BusyBox along with everything needed for automated client registration with Keycloak.
 
-### 8. Verify Client Registration in Keycloak
+### 5. Verify Client Registration in Keycloak
 
 Wait for the client registration to complete.
 
 ```bash
 kubectl wait --for=condition=available --timeout=120s deployment/my-app
 ```
+
 Log in to Keycloak and navigate to [Clients](http://keycloak.localtest.me:8080/admin/master/console/#/master/clients).
 
 Confirm a new client has been created; `Client ID` and `Name` should both be `my-app`.
 
-![`my-app` client](images/my-app_client.png)
+![`my-app` client](images/clients.png)
