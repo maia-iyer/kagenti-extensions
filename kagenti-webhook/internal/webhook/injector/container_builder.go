@@ -74,6 +74,7 @@ func BuildClientRegistrationContainer(clientID, name, namespace string) corev1.C
 	clientId := namespace + "/" + name
 	return corev1.Container{
 		Name: ClientRegistrationContainerName,
+		// // Use the following image after we have solidified kagenti-extensions
 		// Image:           "ghcr.io/kagenti/kagenti-extensions/client-registration:latest",
 		Image:           "ghcr.io/kagenti/kagenti/client-registration:latest",
 		ImagePullPolicy: corev1.PullIfNotPresent,
@@ -90,7 +91,7 @@ func BuildClientRegistrationContainer(clientID, name, namespace string) corev1.C
 		Command: []string{
 			"/bin/sh",
 			"-c",
-			"while [ ! -f /opt/jwt_svid.token ]; do echo waiting for SVID; sleep 1; done; python client_registration.py; tail -f /dev/null",
+			"if [ "$SPIRE_ENABLED" = "true" ]; then while [ ! -f /opt/jwt_svid.token ]; do echo waiting for SVID; sleep 1; done; fi; python client_registration.py; tail -f /dev/null",
 		},
 		Env: []corev1.EnvVar{
 			{

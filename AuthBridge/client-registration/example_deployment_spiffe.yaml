@@ -54,14 +54,15 @@ spec:
             - /bin/sh
             - -c
             - >
-              while [ ! -f /opt/jwt_svid.token ]; do echo waiting for SVID; sleep 1; done;
+              if [ "$SPIRE_ENABLED" = "true" ]; then while [ ! -f /opt/jwt_svid.token ]; do echo waiting for SVID; sleep 1; done; fi;
               python client_registration.py;
               tail -f /dev/null
           env:
             - name: SPIRE_ENABLED
-              configMapKeyRef:
-                name: environments
-                key: SPIRE_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: environments
+                  key: SPIRE_ENABLED
             - name: KEYCLOAK_URL
               valueFrom:
                 configMapKeyRef:

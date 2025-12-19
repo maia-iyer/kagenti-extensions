@@ -389,4 +389,3 @@ AuthProxy
 Postgres
 OpenID
 BusyBox
-KeyCloak

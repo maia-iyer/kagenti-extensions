@@ -67,7 +67,7 @@ Apply the example deployment:
 kubectl apply -f example_deployment_spiffe.yaml
 ```
 
-The example deployment, name `my-app`, will run BusyBox along with everything needed for automated client registration with KeyCloak.
+The example deployment, name `my-app`, will run BusyBox along with everything needed for automated client registration with Keycloak.
 
 ### 8. Verify Client Registration in Keycloak
 
@@ -84,7 +84,7 @@ Confirm a new client has been created; `Client ID` should be a SPIFFE ID and `Na
 
 ## Client Registration without SPIRE
 
-This guide walks you through installing SPIRE components, Gateway API, Keycloak, and deploying a SPIFFE-enabled workload.
+This guide walks you through installing Gateway API and Keycloak, and deploying a workload that uses automated client registration without SPIRE/SPIFFE.
 
 ### 3. Install Gateway API CRDs
 
@@ -119,15 +119,15 @@ Username: admin
 Password: admin
 ```
 
-### 7. Configure Your SPIFFE-Enabled Deployment
+### 7. Configure Your Deployment
 
 Apply the example deployment:
 
 ```bash
-kubectl apply -f example_deployment_spiffe.yaml
+kubectl apply -f example_deployment.yaml
 ```
 
-The example deployment, name `my-app`, will run BusyBox along with everything needed for automated client registration with KeyCloak.
+The example deployment, name `my-app`, will run BusyBox along with everything needed for automated client registration with Keycloak.
 
 ### 8. Verify Client Registration in Keycloak
 
