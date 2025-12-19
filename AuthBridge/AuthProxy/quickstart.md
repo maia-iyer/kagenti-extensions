@@ -1,4 +1,4 @@
-# Auth Proxy
+# AuthProxy quickstart
 
 This document gives a step-by-step tutorial of getting started with the AuthProxy in a local Kind cluster. 
 
