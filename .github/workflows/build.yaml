@@ -21,7 +21,7 @@ jobs:
       matrix:
         image_config:
           - name: client-registration
-            path: ./AuthBridge/keycloak-client-registration
+            path: ./AuthBridge/client-registration
 
     steps:
       # 1. Checkout code
