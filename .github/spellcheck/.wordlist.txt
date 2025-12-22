@@ -121,6 +121,8 @@ jsonnet
 k8s
 Kagenti
 kagenti
+Keycloak
+keycloak
 kube
 kubectl
 kubeconfig
