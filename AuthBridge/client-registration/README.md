@@ -143,7 +143,7 @@ Apply the example deployment:
 kubectl apply -f example_deployment.yaml
 ```
 
-The example deployment, name `my-app`, will run BusyBox in `my-app` namespace along with everything needed for automated client registration with Keycloak.
+The example deployment, name `my-app`, will run BusyBox in `my-agent` namespace along with everything needed for automated client registration with Keycloak.
 
 ### 5. Verify Client Registration in Keycloak
 
