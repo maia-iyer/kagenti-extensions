@@ -288,14 +288,11 @@ spec:
         # Use: kubectl exec -it deployment/caller -c caller -- sh
         # Then: curl -H "Authorization: Bearer $TOKEN" http://demo-app-service:8081/test
         - name: caller
-          image: alpine:latest
+          image: nicolaka/netshoot:latest
           command:
             - /bin/sh
             - -c
             - |
-              # Install curl and jq
-              apk add --no-cache curl jq > /dev/null 2>&1
-              
               echo "Caller pod ready!"
               echo "Waiting for client registration to complete..."
               while [ ! -f /shared/client-secret.txt ] || [ ! -f /shared/client-id.txt ]; do

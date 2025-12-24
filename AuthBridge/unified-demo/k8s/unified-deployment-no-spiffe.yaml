@@ -245,14 +245,11 @@ spec:
       containers:
         # Caller - the calling application (uses alpine with curl and jq)
         - name: caller
-          image: alpine:latest
+          image: nicolaka/netshoot:latest
           command:
             - /bin/sh
             - -c
             - |
-              # Install curl and jq
-              apk add --no-cache curl jq > /dev/null 2>&1
-              
               echo "Caller pod ready!"
               echo "Waiting for client registration to complete..."
               while [ ! -f /shared/client-secret.txt ] || [ ! -f /shared/client-id.txt ]; do
