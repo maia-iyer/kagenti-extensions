@@ -21,7 +21,7 @@ metadata:
   name: authbridge-config
 data:
   SPIRE_ENABLED: "false"
-  KEYCLOAK_URL: "http://keycloak.keycloak.svc:8080"
+  KEYCLOAK_URL: "http://keycloak-service.keycloak.svc:8080"
   KEYCLOAK_REALM: "demo"
   KEYCLOAK_ADMIN_USERNAME: "admin"
   KEYCLOAK_ADMIN_PASSWORD: "admin"
@@ -178,6 +178,8 @@ spec:
               value: "15123"
             - name: PROXY_UID
               value: "1337"
+            - name: OUTBOUND_PORTS_EXCLUDE
+              value: "8080"  # Exclude Keycloak port from iptables redirect
           resources:
             limits:
               cpu: 10m
@@ -271,7 +273,7 @@ spec:
               echo ""
               echo "  CLIENT_ID=\$(cat /shared/client-id.txt)"
               echo "  CLIENT_SECRET=\$(cat /shared/client-secret.txt)"
-              echo "  TOKEN=\$(curl -sX POST http://keycloak.keycloak.svc:8080/realms/demo/protocol/openid-connect/token \\"
+              echo "  TOKEN=\$(curl -sX POST http://keycloak-service.keycloak.svc:8080/realms/demo/protocol/openid-connect/token \\"
               echo "    -d 'grant_type=client_credentials' \\"
               echo "    -d \"client_id=\$CLIENT_ID\" \\"
               echo "    -d \"client_secret=\$CLIENT_SECRET\" | jq -r '.access_token')"
