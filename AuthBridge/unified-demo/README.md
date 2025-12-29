@@ -13,13 +13,13 @@ This demo combines the **Client Registration** and **AuthProxy** components to d
 │  └─────────────────────────────────────────────────────────────────┘   │
 │                                                                        │
 │  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                      Containers                                  │   │
+│  │                      Containers                                 │   │
 │  │  ┌──────────────┐  ┌─────────────────┐  ┌────────────────────┐  │   │
 │  │  │   Caller     │  │  SPIFFE Helper  │  │    AuthProxy +     │  │   │
 │  │  │  (netshoot)  │  │  (provides      │  │    Envoy + Go Proc │  │   │
 │  │  │              │  │   SPIFFE creds) │  │  (token exchange)  │  │   │
 │  │  └──────┬───────┘  └─────────────────┘  └──────────┬─────────┘  │   │
-│  │                                                                  │   │
+│  │                                                                 │   │
 │  │  ┌───────────────────────────────────────────────────────────┐  │   │
 │  │  │ client-registration (registers with Keycloak using SPIFFE)│  │   │
 │  │  └───────────────────────────────────────────────────────────┘  │   │
@@ -71,7 +71,7 @@ The easiest way to get all prerequisites is to use the [Kagenti Ansible installe
 
 ## End-to-End Testing Guide
 
-### Step 1: Build and Load Images
+### Step 1: Build and Load AuthProxy Images
 
 ```bash
 cd AuthBridge/AuthProxy
@@ -88,7 +88,7 @@ make load-images
 Port-forward Keycloak to access it locally:
 
 ```bash
-kubectl port-forward service/keycloak -n keycloak 8080:8080
+kubectl port-forward service/keycloak-service -n keycloak 8080:8080
 ```
 
 In a new terminal, run the setup script:
