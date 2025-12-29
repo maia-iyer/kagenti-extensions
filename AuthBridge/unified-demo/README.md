@@ -123,8 +123,12 @@ The script creates:
 # Create the auth-proxy-config secret
 kubectl apply -f k8s/auth-proxy-config.yaml
 
-# Update with the actual authproxy client secret from Step 2
-kubectl patch secret auth-proxy-config -p '{"stringData":{"CLIENT_SECRET":"YOUR_AUTHPROXY_SECRET"}}'
+# IMPORTANT: Update with the actual authproxy client secret from Step 2
+# Copy the secret value from the setup_keycloak.py output
+kubectl patch secret auth-proxy-config -p '{"stringData":{"CLIENT_SECRET":"YOUR_AUTHPROXY_SECRET_HERE"}}'
+
+# Verify it was updated (should NOT show REPLACE_WITH_AUTHPROXY_SECRET)
+kubectl get secret auth-proxy-config -o jsonpath='{.data.CLIENT_SECRET}' | base64 -d && echo
 ```
 
 ### Step 4: Configure Image Pull Secret (if needed)
@@ -159,7 +163,7 @@ kubectl wait --for=condition=available --timeout=120s deployment/demo-app
 kubectl exec -it deployment/caller -c caller -- sh
 ```
 
-Inside the container:
+Inside the container (or run as a single command):
 
 ```bash
 # Credentials are auto-populated by client-registration
@@ -186,6 +190,19 @@ curl -H "Authorization: Bearer $TOKEN" http://demo-app-service:8081/test
 # Expected output: "authorized"
 ```
 
+**Or run the complete test as a single command:**
+
+```bash
+kubectl exec deployment/caller -c caller -- sh -c '
+CLIENT_ID=$(cat /shared/client-id.txt)
+CLIENT_SECRET=$(cat /shared/client-secret.txt)
+TOKEN=$(curl -s http://keycloak-service.keycloak.svc:8080/realms/demo/protocol/openid-connect/token \
+  -d "grant_type=client_credentials" -d "client_id=$CLIENT_ID" -d "client_secret=$CLIENT_SECRET" | jq -r ".access_token")
+echo "Token audience: $(echo $TOKEN | cut -d. -f2 | base64 -d 2>/dev/null | jq -r .aud)"
+echo "Result: $(curl -s -H "Authorization: Bearer $TOKEN" http://demo-app-service:8081/test)"
+'
+```
+
 ## Verification
 
 ### Check Client Registration
@@ -195,7 +212,8 @@ kubectl logs deployment/caller -c client-registration
 ```
 
 You should see:
-```
+
+```shell
 SPIFFE credentials ready!
 Client ID (SPIFFE ID): spiffe://...
 Created Keycloak client "spiffe://..."
@@ -209,7 +227,8 @@ kubectl logs deployment/caller -c envoy-proxy 2>&1 | grep -i "token"
 ```
 
 You should see:
-```
+
+```shell
 [Token Exchange] All required headers present, attempting token exchange
 [Token Exchange] Successfully exchanged token
 [Token Exchange] Replacing token in Authorization header
@@ -222,7 +241,8 @@ kubectl logs deployment/demo-app
 ```
 
 You should see:
-```
+
+```shell
 [JWT Debug] Successfully validated token
 [JWT Debug] Audience: [demoapp]
 Authorized request: GET /test
@@ -253,6 +273,35 @@ Authorized request: GET /test
 **Symptom:** `sh: curl: not found` or `sh: jq: not found`
 
 **Fix:** The caller container should use `nicolaka/netshoot:latest` image which has these tools pre-installed.
+
+### No Token Received
+
+**Symptom:** `echo $TOKEN=null`
+
+**Fix:** Make sure the `serviceAccountsEnabled` is present in the `client-registration` image.
+
+#### Enable Service Accounts for the Registered Client
+
+The published `client-registration` image doesn't yet have the `serviceAccountsEnabled` fix. Run this to enable it:
+
+```bash
+kubectl exec deployment/caller -c caller -- sh -c '
+CLIENT_ID=$(cat /shared/client-id.txt)
+echo "Enabling service accounts for: $CLIENT_ID"
+
+ADMIN_TOKEN=$(curl -s http://keycloak-service.keycloak.svc:8080/realms/master/protocol/openid-connect/token \
+  -d "grant_type=password" -d "client_id=admin-cli" -d "username=admin" -d "password=admin" | jq -r ".access_token")
+
+INTERNAL_ID=$(curl -s -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "http://keycloak-service.keycloak.svc:8080/admin/realms/demo/clients?clientId=$CLIENT_ID" | jq -r ".[0].id")
+
+curl -s -X PUT -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  "http://keycloak-service.keycloak.svc:8080/admin/realms/demo/clients/$INTERNAL_ID" \
+  -d "{\"clientId\": \"$CLIENT_ID\", \"serviceAccountsEnabled\": true}"
+
+echo "Done!"
+'
+```
 
 ### View All Logs
 
