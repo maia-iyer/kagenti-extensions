@@ -28,7 +28,7 @@ def get_or_create_user(keycloak_admin, username):
     return user_id
 
 def get_or_create_client(keycloak_admin, client_payload):
-    existing_client_id=keycloak_admin.get_client_id(client_payload["clientId"])
+    existing_client_id = keycloak_admin.get_client_id(client_payload["clientId"])
     if existing_client_id:
         print(f"Client '{client_payload["clientId"]}' already exists.")
         return existing_client_id
