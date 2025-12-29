@@ -1,32 +1,32 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: auth-target
+  name: demo-app
   labels:
-    app: auth-target
+    app: demo-app
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: auth-target
+      app: demo-app
   template:
     metadata:
       labels:
-        app: auth-target
+        app: demo-app
     spec:
       containers:
-      - name: auth-target
-        image: localhost/auth-target:latest
+      - name: demo-app
+        image: localhost/demo-app:latest
         imagePullPolicy: Never
         ports:
         - containerPort: 8081
         env:
         - name: ISSUER
-          value: "http://keycloak.localtest.me:8080/realms/master"
+          value: "http://keycloak.localtest.me:8080/realms/demo"
         - name: JWKS_URL
-          value: "http://keycloak.keycloak.svc.cluster.local:8080/realms/master/protocol/openid-connect/certs"
+          value: "http://keycloak-service.keycloak.svc.cluster.local:8080/realms/demo/protocol/openid-connect/certs"
         - name: AUDIENCE
-          value: "spiffe://localtest.me/ns/default/sa/slack-tool"
+          value: "authproxy"
         resources:
           requests:
             memory: "64Mi"
@@ -38,12 +38,13 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: auth-target-service
+  name: demo-app-service
 spec:
   selector:
-    app: auth-target
+    app: demo-app
   ports:
     - protocol: TCP
       port: 8081
       targetPort: 8081
   type: ClusterIP
+

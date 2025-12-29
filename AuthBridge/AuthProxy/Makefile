@@ -1,11 +1,13 @@
 .PHONY: dev clean build build-images run-proxy run-target test docker-build-proxy docker-build-target docker-build-init docker-build-python deploy load-images undeploy kind-create kind-delete
 
+KIND_CLUSTER_NAME ?= kagenti # default to kagenti cluster name
+
 # Docker build targets
 docker-build-proxy:
 	podman build -t auth-proxy:latest .
 
 docker-build-target:
-	cd target && podman build -t auth-target:latest -f Dockerfile .
+	cd quickstart/demo-app && podman build -t demo-app:latest -f Dockerfile .
 
 docker-build-init:
 	podman build -f Dockerfile.init -t proxy-init:latest .
@@ -21,27 +23,27 @@ build-images: docker-build-proxy docker-build-target docker-build-init docker-bu
 
 # Load Docker images into kind cluster
 load-images:
-	kind load docker-image auth-proxy:latest --name agent-platform
-	kind load docker-image auth-target:latest --name agent-platform
-	kind load docker-image proxy-init:latest --name agent-platform
-	kind load docker-image envoy-with-processor:latest --name agent-platform
+	kind load docker-image auth-proxy:latest --name $(KIND_CLUSTER_NAME)
+	kind load docker-image demo-app:latest --name $(KIND_CLUSTER_NAME)
+	kind load docker-image proxy-init:latest --name $(KIND_CLUSTER_NAME)
+	kind load docker-image envoy-with-processor:latest --name $(KIND_CLUSTER_NAME)
 
 # Deploy to Kubernetes
 deploy:
-	kubectl apply -f k8s/auth-target-deployment.yaml
+	kubectl apply -f quickstart/k8s/demo-app-deployment.yaml
 	kubectl apply -f k8s/auth-proxy-deployment.yaml
 
 # Remove deployment from Kubernetes
 undeploy:
 	kubectl delete -f k8s/auth-proxy-deployment.yaml --ignore-not-found=true
-	kubectl delete -f k8s/auth-target-deployment.yaml --ignore-not-found=true
+	kubectl delete -f quickstart/k8s/demo-app-deployment.yaml --ignore-not-found=true
 
 # Kind cluster management
 kind-create:
-	kind create cluster --name agent-platform
+	kind create cluster --name $(KIND_CLUSTER_NAME)
 
 kind-delete:
-	kind delete cluster --name agent-platform
+	kind delete cluster --name $(KIND_CLUSTER_NAME)
 
 # Test the application
 test:
