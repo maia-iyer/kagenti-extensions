@@ -1,7 +1,7 @@
 """
-setup_keycloak.py - Unified AuthBridge Demo Setup
+setup_keycloak.py - AuthBridge Demo Setup
 
-This script configures Keycloak for the unified AuthBridge demo that combines:
+This script configures Keycloak for the AuthBridge demo that combines:
 1. Client Registration with SPIFFE ID (for the caller)
 2. AuthProxy sidecar for token exchange
 3. Demo App (target server) that validates exchanged tokens
@@ -111,7 +111,7 @@ def add_audience_mapper(keycloak_admin, scope_id, mapper_name, audience):
 
 def main():
     print("=" * 60)
-    print("Unified AuthBridge Demo - Keycloak Setup")
+    print("AuthBridge Demo - Keycloak Setup")
     print("=" * 60)
     
     # Connect to Keycloak master realm first
@@ -247,11 +247,11 @@ def main():
         print("\n1. Update the auth-proxy-config secret with the authproxy client secret:")
         print(f"\n   kubectl patch secret auth-proxy-config -p '{{\"stringData\":{{\"CLIENT_SECRET\":\"{authproxy_secret}\"}}}}'\n")
         
-        print("2. Deploy the unified demo:")
+        print("2. Deploy the AuthBridge demo:")
         print("\n   # With SPIFFE (requires SPIRE)")
-        print("   kubectl apply -f k8s/unified-deployment.yaml")
+        print("   kubectl apply -f k8s/authbridge-deployment.yaml")
         print("\n   # OR without SPIFFE")
-        print("   kubectl apply -f k8s/unified-deployment-no-spiffe.yaml\n")
+        print("   kubectl apply -f k8s/authbridge-deployment-no-spiffe.yaml\n")
         
         print("3. Wait for pods to be ready:")
         print("\n   kubectl wait --for=condition=available --timeout=120s deployment/caller")

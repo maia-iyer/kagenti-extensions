@@ -1,4 +1,4 @@
-# Unified AuthProxy + Client Registration + Demo App Deployment
+# AuthBridge Demo Deployment (with SPIFFE)
 # 
 # This deployment demonstrates:
 # 1. Caller pod with automatic client registration using SPIFFE ID
