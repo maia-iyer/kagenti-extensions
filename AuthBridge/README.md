@@ -10,23 +10,23 @@ The AuthBridge demo showcases a complete **zero-trust authentication flow** for 
 
 1. **Automatic Workload Identity** - A pod automatically obtains its identity from SPIFFE/SPIRE and registers itself as a Keycloak client using its SPIFFE ID (e.g., `spiffe://localtest.me/ns/authbridge/sa/caller`)
 
-2. **Token-Based Authentication** - The caller workload authenticates to Keycloak using `client_credentials` grant and receives a JWT token with audience `authproxy`
+2. **Token-Based Authentication** - The caller workload authenticates to Keycloak using `client_credentials` grant and receives a JWT access token with its own client ID (SPIFFE ID) as the audience.
 
-3. **Transparent Token Exchange** - When the caller makes a request to the target service, an Envoy sidecar transparently intercepts the request and exchanges the token for one with the correct audience (`auth-target`)
+3. **Transparent Token Exchange** - When the caller makes a request to the target service, an Envoy sidecar (AuthProxy) transparently intercepts the request, validates the token signature and issuer (but **not** the audience), and exchanges the token for one with the correct audience (`auth-target`). The caller doesn't need to know about the proxy.
 
 4. **Target Service Validation** - The target service validates the exchanged token, ensuring it has the correct audience before authorizing the request
 
 ### End-to-End Flow
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────────────┐
-│  1. SPIFFE Helper obtains SVID from SPIRE Agent                                     │
-│  2. Client Registration extracts SPIFFE ID and registers with Keycloak              │
-│  3. Caller gets token from Keycloak (audience: "authproxy")                         │
-│  4. Caller sends request to auth-target with token                                  │
-│  5. Envoy intercepts request, Go Processor exchanges token (audience: "auth-target")│
-│  6. Auth Target validates token and returns "authorized"                            │
-└─────────────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│  1. SPIFFE Helper obtains SVID from SPIRE Agent                                         │
+│  2. Client Registration extracts SPIFFE ID and registers with Keycloak                  │
+│  3. Caller gets token from Keycloak (audience: caller's SPIFFE ID)                      │
+│  4. Caller sends request to auth-target with token                                      │
+│  5. Envoy intercepts request, Go Processor exchanges token (audience: "auth-target")    │
+│  6. Auth Target validates token and returns "authorized"                                │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
 
   SPIRE Agent                    Keycloak                       Auth Target
        │                            │                               │
@@ -41,22 +41,22 @@ The AuthBridge demo showcases a complete **zero-trust authentication flow** for 
   ┌─────────┐  3. Get token         │                               │
   │ Caller  │──────────────────────►│                               │
   │         │◄──────────────────────│                               │
-  │         │   (aud: authproxy)    │                               │
+  │         │ (aud: SPIFFE ID)      │   ← Caller's own identity     │
   │         │                       │                               │
   │         │  4. Request + token   │                               │
   │         │───────────────────────┼──────────────────────────────►│
   └─────────┘                       │                               │
        │                            │                               │
        │      ┌──────────────┐      │                               │
-       └─────►│ Envoy+GoPro  │      │                               │
+       └─────►│ Envoy+GoPro  │      │   ← Transparent proxy         │
               │              │  5. Exchange token                   │
               │              │─────►│                               │
               │              │◄─────│                               │
               │              │   (aud: auth-target)                 │
               │              │─────────────────────────────────────►│
               └──────────────┘                              6. Validate & Authorize
-                                                                    │
-                                                               "authorized"
+                                                                   │
+                                                              "authorized"
 ```
 
 <details>
@@ -79,18 +79,18 @@ sequenceDiagram
     Reg->>KC: Register client (SPIFFE ID)
     KC-->>Reg: Client credentials
 
-    Note over Caller,Target: Request Flow
+    Note over Caller,Target: Request Flow (Transparent Proxy)
     Caller->>KC: Get token (client_credentials)
-    KC-->>Caller: Token (aud: authproxy)
+    KC-->>Caller: Token (aud: caller's SPIFFE ID)
     
     Caller->>Envoy: Request + Token
-    Note over Envoy: Intercepts outbound traffic
+    Note over Envoy: Transparent - accepts any valid token
     
     Envoy->>KC: Token Exchange
     KC-->>Envoy: New Token (aud: auth-target)
     
     Envoy->>Target: Request + Exchanged Token
-    Target->>Target: Validate token
+    Target->>Target: Validate token (aud: auth-target)
     Target-->>Caller: "authorized"
 ```
 
@@ -102,8 +102,8 @@ sequenceDiagram
 |------|-----------|--------------|
 | 1 | SPIFFE Helper | SVID obtained from SPIRE Agent |
 | 2 | Client Registration | Keycloak client created with SPIFFE ID |
-| 3 | Caller | Token received with `aud: authproxy` |
-| 4 | Envoy + Go Processor | Token exchanged successfully |
+| 3 | Caller | Token received with `aud: <caller's SPIFFE ID>` |
+| 4 | Envoy + Go Processor | Token exchanged successfully (transparent mode) |
 | 5 | Auth Target | Token validated with `aud: auth-target` |
 | 6 | *End-to-End* | Response: `"authorized"` |
 
@@ -188,7 +188,7 @@ flowchart TB
     SpiffeHelper --> ClientReg
     ClientReg --> Keycloak
     Caller --> Keycloak
-    Caller -->|"Request + Token<br/>(aud: authproxy)"| Envoy
+    Caller -->|"Request + Token<br/>(aud: caller's SPIFFE ID)"| Envoy
     Envoy --> GoProc
     GoProc -->|"Token Exchange"| Keycloak
     Envoy -->|"Request + Token<br/>(aud: auth-target)"| AuthTarget
@@ -362,7 +362,7 @@ TOKEN=$(curl -sX POST http://keycloak-service.keycloak.svc:8080/realms/demo/prot
 
 echo "Token obtained!"
 
-# Verify token audience (should be "authproxy")
+# Verify token audience (should be caller's client ID / SPIFFE ID)
 echo $TOKEN | cut -d'.' -f2 | base64 -d 2>/dev/null | jq '{aud, azp, scope}'
 
 # Call auth-target (AuthProxy will exchange token for "auth-target" audience)
@@ -417,9 +417,9 @@ echo $TOKEN | cut -d'.' -f2 | base64 -d 2>/dev/null | jq '{
 **Expected output:**
 ```json
 {
-  "aud": "authproxy",
+  "aud": "account",
   "azp": "spiffe://localtest.me/ns/authbridge/sa/caller",
-  "scope": "profile authproxy-aud email",
+  "scope": "profile email",
   "iss": "http://keycloak.localtest.me:8080/realms/demo",
   "sub": "...",
   "exp": 1234567890,
@@ -428,9 +428,9 @@ echo $TOKEN | cut -d'.' -f2 | base64 -d 2>/dev/null | jq '{
 ```
 
 Key observations:
-- `aud: "authproxy"` - Token is scoped for AuthProxy
-- `azp` - The SPIFFE ID of the caller (authorized party)
-- `scope` - Includes `authproxy-aud` scope
+- `aud` - Default Keycloak audience (the caller doesn't need a specific audience)
+- `azp` - The SPIFFE ID of the caller (authorized party / client ID)
+- **Transparent mode** - AuthProxy accepts this token without requiring a specific audience
 
 #### View Exchanged Token Claims (After Exchange)
 
@@ -486,12 +486,17 @@ echo "Run: kubectl logs deployment/auth-target -n authbridge | tail -20"
 
 | Claim | Before Exchange | After Exchange |
 |-------|-----------------|----------------|
-| `aud` | `authproxy` | `auth-target` |
+| `aud` | `account` (default) | `auth-target` |
 | `azp` | SPIFFE ID (caller) | `authproxy` |
-| `scope` | `authproxy-aud` | `auth-target-aud` |
+| `scope` | `profile email` | `auth-target-aud` |
 | `iss` | Keycloak realm | Keycloak realm (same) |
 
-The key change is the **audience (`aud`)** - it transforms from `authproxy` to `auth-target`, allowing the target service to validate the token.
+The key change is the **audience (`aud`)** - it transforms from the default audience to `auth-target`, allowing the target service to validate the token.
+
+**Transparent Mode Benefits:**
+- The caller doesn't need to request a specific audience
+- AuthProxy accepts any valid token from the issuer
+- Token exchange is completely transparent to the calling application
 
 ## Verification
 

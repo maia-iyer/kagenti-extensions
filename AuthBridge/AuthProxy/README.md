@@ -53,12 +53,36 @@ A Go HTTP proxy that:
 - Returns `401 Unauthorized` for invalid tokens
 
 **Configuration via environment variables:**
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `JWKS_URL` | URL to fetch public keys for JWT validation | `http://keycloak:8080/realms/demo/.../certs` |
-| `ISSUER` | Expected token issuer | `http://keycloak:8080/realms/demo` |
-| `AUDIENCE` | Expected token audience for AuthProxy | `authproxy` |
-| `TARGET_SERVICE_URL` | URL to forward requests to | `http://target-service:8081` |
+| Variable | Required | Description | Example |
+|----------|----------|-------------|---------|
+| `JWKS_URL` | Yes | URL to fetch public keys for JWT validation | `http://keycloak:8080/realms/demo/.../certs` |
+| `ISSUER` | Yes | Expected token issuer | `http://keycloak:8080/realms/demo` |
+| `AUDIENCE` | No | Expected token audience (if empty, accepts any valid token) | `authproxy` |
+| `TARGET_SERVICE_URL` | No | URL to forward requests to | `http://target-service:8081` |
+
+#### Transparent Mode (No Audience Validation)
+
+When `AUDIENCE` is **not set**, AuthProxy operates in **transparent mode**:
+- Validates only the token **signature** and **issuer**
+- Accepts tokens with **any audience** (e.g., the caller's SPIFFE ID)
+- Relies on **token exchange** (via Go Processor) to set the correct target audience
+
+This is useful when the caller obtains a token for itself and you want the proxy to transparently exchange it:
+
+```
+Caller gets token: aud=caller  →  AuthProxy (transparent)  →  Token Exchange  →  aud=auth-target
+```
+
+To enable transparent mode, simply omit the `AUDIENCE` environment variable:
+
+```yaml
+env:
+  - name: JWKS_URL
+    value: "http://keycloak:8080/realms/demo/protocol/openid-connect/certs"
+  - name: ISSUER
+    value: "http://keycloak:8080/realms/demo"
+  # AUDIENCE not set - transparent mode
+```
 
 ### 2. Go External Processor (`go-processor/main.go`)
 
