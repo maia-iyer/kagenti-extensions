@@ -43,7 +43,7 @@ AuthProxy intercepts outgoing requests, validates the caller's token, and exchan
 
 AuthProxy consists of two main components that work together:
 
-### 1. Auth Proxy (`main.go`)
+### 1. AuthProxy (`main.go`)
 
 A Go HTTP proxy that:
 - Receives incoming requests on port **8080**
@@ -84,7 +84,7 @@ An Envoy external processor (gRPC) that:
 
 When deployed as a sidecar, AuthProxy intercepts all outgoing traffic from the application:
 
-```
+```cmd
 ┌─────────────────────────────────────────────────────────────────┐
 │                         POD                                     │
 │  ┌──────────────┐    ┌─────────────────────────────────────┐    │
@@ -96,7 +96,7 @@ When deployed as a sidecar, AuthProxy intercepts all outgoing traffic from the a
 │         │            │        │                 │          │    │
 │         │            │        ▼                 ▼          │    │
 │  ┌──────┴───────┐    │  ┌───────────┐    ┌──────────────┐  │    │
-│  │  proxy-init  │    │  │Auth Proxy │    │   Keycloak   │  │    │
+│  │  proxy-init  │    │  │AuthProxy  │    │   Keycloak   │  │    │
 │  │ (iptables)   │    │  │   :8080   │    │ (exchange)   │  │    │
 │  └──────────────┘    │  └───────────┘    └──────────────┘  │    │
 │                      └─────────────────────────────────────┘    │
@@ -107,14 +107,14 @@ When deployed as a sidecar, AuthProxy intercepts all outgoing traffic from the a
 - **proxy-init**: Init container that sets up iptables to redirect outbound traffic to Envoy
 - **Envoy**: Intercepts traffic, adds token exchange headers via Lua filter, calls Go Processor
 - **Go Processor**: Performs the actual token exchange with Keycloak
-- **Auth Proxy**: Validates incoming tokens (can also be used for inbound traffic)
+- **AuthProxy**: Validates incoming tokens (can also be used for inbound traffic)
 
 ### Standalone Deployment
 
 AuthProxy can also be deployed as a standalone service for validating incoming requests:
 
-```
-Client ──► Auth Proxy (validates token) ──► Target Service
+```cmd
+Client ──► AuthProxy (validates token) ──► Target Service
 ```
 
 ## Quick Start
@@ -138,6 +138,7 @@ make load-images
 ```
 
 This builds:
+
 - `auth-proxy:latest` - JWT validation proxy
 - `demo-app:latest` - Sample target application
 - `proxy-init:latest` - iptables init container
@@ -183,7 +184,7 @@ curl -H "Authorization: Bearer invalid-token" http://localhost:8080/test
 ### View Logs
 
 ```bash
-# Auth proxy logs (shows token validation)
+# AuthProxy logs (shows token validation)
 kubectl logs deployment/caller -c auth-proxy
 
 # Envoy/Go Processor logs (shows token exchange)
@@ -197,13 +198,13 @@ kubectl logs deployment/auth-target
 
 The Go Processor performs OAuth 2.0 Token Exchange as defined in [RFC 8693](https://datatracker.ietf.org/doc/html/rfc8693):
 
-```
+```cmd
 POST /realms/demo/protocol/openid-connect/token
 Content-Type: application/x-www-form-urlencoded
 
 grant_type=urn:ietf:params:oauth:grant-type:token-exchange
 &client_id=authproxy
-&client_secret=xxx
+&client_secret=<client-secret>
 &subject_token=<original-jwt>
 &subject_token_type=urn:ietf:params:oauth:token-type:access_token
 &requested_token_type=urn:ietf:params:oauth:token-type:access_token
@@ -212,6 +213,7 @@ grant_type=urn:ietf:params:oauth:grant-type:token-exchange
 ```
 
 **Response:**
+
 ```json
 {
   "access_token": "<new-jwt-with-auth-target-audience>",
@@ -222,7 +224,7 @@ grant_type=urn:ietf:params:oauth:grant-type:token-exchange
 
 ## Configuration
 
-### Auth Proxy Environment Variables
+### AuthProxy Environment Variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
