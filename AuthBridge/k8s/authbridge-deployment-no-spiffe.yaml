@@ -14,6 +14,41 @@
 #   - Validates tokens with audience "auth-target"
 
 ---
+# =============================================================================
+# NAMESPACE AND SERVICE ACCOUNT
+# =============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: authbridge
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agent
+  namespace: authbridge
+
+---
+# =============================================================================
+# AUTH PROXY CONFIGURATION
+# CLIENT_ID and CLIENT_SECRET come from /shared/ files (populated by client-registration)
+# =============================================================================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: auth-proxy-config
+  namespace: authbridge
+type: Opaque
+stringData:
+  TOKEN_URL: "http://keycloak-service.keycloak.svc.cluster.local:8080/realms/demo/protocol/openid-connect/token"
+  TARGET_AUDIENCE: "auth-target"
+  TARGET_SCOPES: "openid auth-target-aud"
+
+---
+# =============================================================================
+# CONFIGMAPS
+# =============================================================================
 # Shared ConfigMap for environment variables
 apiVersion: v1
 kind: ConfigMap
@@ -326,21 +361,12 @@ spec:
             - containerPort: 9090
               name: ext-proc
           env:
+            # Token exchange configuration (static)
             - name: TOKEN_URL
               valueFrom:
                 secretKeyRef:
                   name: auth-proxy-config
                   key: TOKEN_URL
-            - name: CLIENT_ID
-              valueFrom:
-                secretKeyRef:
-                  name: auth-proxy-config
-                  key: CLIENT_ID
-            - name: CLIENT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: auth-proxy-config
-                  key: CLIENT_SECRET
             - name: TARGET_AUDIENCE
               valueFrom:
                 secretKeyRef:
@@ -351,9 +377,17 @@ spec:
                 secretKeyRef:
                   name: auth-proxy-config
                   key: TARGET_SCOPES
+            # Dynamic credentials from client-registration (via files)
+            - name: CLIENT_ID_FILE
+              value: "/shared/client-id.txt"
+            - name: CLIENT_SECRET_FILE
+              value: "/shared/client-secret.txt"
           volumeMounts:
             - name: envoy-config
               mountPath: /etc/envoy
+              readOnly: true
+            - name: shared-data
+              mountPath: /shared
               readOnly: true
           resources:
             limits:

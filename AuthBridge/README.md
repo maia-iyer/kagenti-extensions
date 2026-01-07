@@ -1,24 +1,22 @@
-# AuthBridge Demo
+# AuthBridge
 
-This demo combines the [**Client Registration**](./client-registration/) and [**AuthProxy**](./AuthProxy/) components to demonstrate a complete end-to-end authentication flow with [SPIFFE/SPIRE](https://spiffe.io) integration.
+AuthBridge provides **secure, transparent token management** for Kubernetes workloads. It combines automatic [client registration](./client-registration/) with [token exchange](./AuthProxy/) capabilities, enabling zero-trust authentication flows with [SPIFFE/SPIRE](https://spiffe.io) integration.
 
-## Overview
+> **📘 Looking to run the demo?** See the [Demo Guide](./demo.md) for step-by-step instructions.
 
-### What This Demo Demonstrates
+## What AuthBridge Does
 
-The AuthBridge demo showcases a complete **zero-trust authentication flow** for Kubernetes workloads:
+AuthBridge solves the challenge of **secure service-to-service authentication** in Kubernetes:
 
-1. **Automatic Agent Identity** - An Agent pod automatically obtains its identity from SPIFFE/SPIRE and registers itself as a Keycloak client using its SPIFFE ID (e.g., `spiffe://localtest.me/ns/authbridge/sa/agent`)
+1. **Automatic Identity** - Workloads automatically obtain their identity from SPIFFE/SPIRE and register as Keycloak clients using their SPIFFE ID (e.g., `spiffe://localtest.me/ns/authbridge/sa/agent`)
 
-2. **Token-Based Authorization** - A Caller obtains a JWT access token from Keycloak with the Agent's identity as the audience (`aud: Agent's SPIFFE ID`). This authorizes the Caller to invoke the Agent.
+2. **Token-Based Authorization** - Callers obtain JWT tokens from Keycloak with the target's identity as the audience, authorizing them to invoke specific services
 
-3. **Token Delegation** - The Caller passes the token to the Agent. When the Agent needs to call an external service (Auth Target), it uses this token.
+3. **Transparent Token Exchange** - A sidecar intercepts outgoing requests, validates incoming tokens, and exchanges them for tokens with the appropriate target audience—all without application code changes
 
-4. **Transparent Token Exchange** - The Agent's AuthProxy sidecar intercepts outgoing requests, validates the token (audience matches Agent's own identity), and exchanges it for a new token with `aud: auth-target` using the Agent's own credentials.
+4. **Target Service Validation** - Target services validate the exchanged token, ensuring it has the correct audience before authorizing requests
 
-5. **Target Service Validation** - The Auth Target validates the exchanged token, ensuring it has the correct audience before authorizing the request
-
-### End-to-End Flow
+## End-to-End Flow
 
 **Initialization (Agent Pod Startup):**
 ```
@@ -117,25 +115,25 @@ sequenceDiagram
 
 </details>
 
-### What Gets Verified
+## What Gets Verified
 
 | Step | Component | Verification |
 |------|-----------|--------------|
 | 0 | SPIFFE Helper | SVID obtained from SPIRE Agent |
 | 1 | Client Registration | Agent registered with Keycloak (client_id = SPIFFE ID) |
-| 2 | Caller | Token obtained with `aud: Agent's SPIFFE ID` (via `self-aud` scope) |
+| 2 | Caller | Token obtained with `aud: Agent's SPIFFE ID` (via `agent-spiffe-aud` scope) |
 | 3 | Agent | Token received from Caller |
 | 4 | AuthProxy | Token validated (aud matches Agent's identity) |
 | 5 | Ext Proc | Token exchanged using Agent's credentials → `aud: auth-target` |
 | 6 | Auth Target | Token validated, returns `"authorized"` |
 
-### Key Security Properties
+## Key Security Properties
 
-- **No Static Secrets** - The Agent's credentials are dynamically generated during registration
+- **No Static Secrets** - Credentials are dynamically generated during registration
 - **Short-Lived Tokens** - JWT tokens expire and must be refreshed
 - **Self-Audience Scoping** - Tokens include the Agent's own identity as audience, enabling token exchange
 - **Same Identity for Exchange** - AuthProxy uses the Agent's credentials (same SPIFFE ID), matching the token's audience
-- **Transparent to Application** - The Agent doesn't need to implement token exchange logic; it's handled by the sidecar
+- **Transparent to Application** - Token exchange is handled by the sidecar; applications don't need to implement it
 
 ## Architecture
 
@@ -161,7 +159,7 @@ sequenceDiagram
 │  │  │ client-registration (registers Agent with Keycloak)       │  │   │
 │  │  └───────────────────────────────────────────────────────────┘  │   │
 │  └─────────┼───────────────────────────────────────────┼───────────┘   │
-│            │ Caller's token (aud: Agent)               │               │
+│            │ Caller's token (aud: SPIFFE ID)           │               │
 │            └───────────────────────────────────────────┘               │
 │                              │                                         │
 └──────────────────────────────┼─────────────────────────────────────────┘
@@ -183,12 +181,12 @@ sequenceDiagram
 
 ```mermaid
 flowchart TB
-    subgraph CallerPod["CALLER POD (namespace: authbridge, sa: caller)"]
+    subgraph AgentPod["AGENT POD (namespace: authbridge, sa: agent)"]
         subgraph Init["Init Container"]
             ProxyInit["proxy-init<br/>(iptables setup)"]
         end
         subgraph Containers["Containers"]
-            Caller["Caller<br/>(netshoot)"]
+            Agent["agent<br/>(netshoot)"]
             SpiffeHelper["SPIFFE Helper<br/>(provides SVID)"]
             ClientReg["client-registration<br/>(registers with Keycloak)"]
             subgraph Sidecar["AuthProxy Sidecar"]
@@ -208,32 +206,32 @@ flowchart TB
         Keycloak["Keycloak"]
     end
 
+    Caller["Caller<br/>(external)"]
+
     SPIRE --> SpiffeHelper
     SpiffeHelper --> ClientReg
     ClientReg --> Keycloak
-    Caller --> Keycloak
-    Caller -->|"Request + Token<br/>(aud: agent)"| Envoy
+    Caller -->|"1. Get token"| Keycloak
+    Caller -->|"2. Pass token"| Agent
+    Agent -->|"3. Request + Token"| Envoy
     Envoy --> ExtProc
-    ExtProc -->|"Token Exchange"| Keycloak
-    Envoy -->|"Request + Token<br/>(aud: auth-target)"| AuthTarget
-    AuthTarget -->|"authorized"| Caller
+    ExtProc -->|"4. Token Exchange"| Keycloak
+    Envoy -->|"5. Request + Exchanged Token"| AuthTarget
+    AuthTarget -->|"6. Response"| Agent
+    Agent -->|"7. Response"| Caller
 
-    style CallerPod fill:#e1f5fe
+    style AgentPod fill:#e1f5fe
     style TargetPod fill:#e8f5e9
     style Sidecar fill:#fff3e0
     style External fill:#fce4ec
+    style Caller fill:#fff9c4
 ```
 
 </details>
 
-### Token Flow
+## Components
 
-1. **Client Registration** container uses the **SPIFFE ID** to register the caller workload with Keycloak
-2. **Caller** obtains a token from Keycloak using the auto-registered client credentials
-3. **AuthProxy + Envoy** (sidecar) intercepts the outgoing request and exchanges the token for one with audience `auth-target`
-4. **Auth Target** (target server) validates the exchanged token
-
-### Components in Caller Pod
+### Agent Pod
 
 | Container | Type | Purpose |
 |-----------|------|---------|
@@ -244,6 +242,10 @@ flowchart TB
 | `auth-proxy` | container | Validates tokens |
 | `envoy-proxy` | container | Intercepts traffic and performs token exchange via Ext Proc |
 
+### Auth Target Pod
+
+A target service that validates incoming tokens have `aud: auth-target`.
+
 ## Prerequisites
 
 - Kubernetes cluster (Kind recommended for local development)
@@ -251,443 +253,20 @@ flowchart TB
 - Keycloak deployed
 - Docker/Podman for building images
 
-### Quick Setup with Kagenti
+### Quick Setup
 
 The easiest way to get all prerequisites is to use the [Kagenti Ansible installer](https://github.com/kagenti/kagenti/blob/main/docs/install.md#ansible-based-installer-recommended).
 
-## End-to-End Testing Guide
-
-### Step 1: Build and Load AuthProxy Images
-
-*Note: This step will be replaced by the CI pipeline. The images will be auto-created*
-
-```bash
-cd AuthBridge/AuthProxy
-
-# Build all images
-make build-images
-
-# Load images into Kind cluster
-make load-images
-```
-
-### Step 2: Setup AuthBridge Namespace, ServiceAccount, and Config
-
-```bash
-cd AuthBridge/
-kubectl apply -f k8s/auth-proxy-config.yaml
-```
-
-This creates:
-
-- `authbridge` namespace
-- `agent` ServiceAccount
-- `auth-proxy-config` secret for accessing Keycloak
-
-### Step 3: Configure Keycloak
-
-Assuming Keycloak is running as a part of the Kagenti install, port-forward Keycloak to access it locally:
-
-```bash
-kubectl port-forward service/keycloak-service -n keycloak 8080:8080
-```
-
-In a new terminal, run the setup script:
-
-```bash
-cd AuthBridge
-
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate
-
-# Install dependencies
-pip install --upgrade pip
-pip install -r requirements.txt
-
-# Run setup script
-python setup_keycloak.py
-```
-
-The `setup_keycloak` script creates:
-
-- `demo` realm
-- `agent` client (for token exchange)
-- `auth-target` client (token exchange target audience)
-- `agent-aud` scope (realm default - all clients get it)
-- `auth-target-aud` scope (for exchanged tokens)
-
-**Important:** Copy the `agent` client secret from the output.
-
-### Step 4: Update the Secret
-
-```bash
-# IMPORTANT: Update with the actual agent client secret from Step 3
-# Copy the secret value from the setup_keycloak.py output
-kubectl patch secret auth-proxy-config -n authbridge -p '{"stringData":{"CLIENT_SECRET":"YOUR_AUTHPROXY_SECRET_HERE"}}'
-
-# Verify it was updated (should NOT show REPLACE_WITH_AUTHPROXY_SECRET)
-kubectl get secret auth-proxy-config -n authbridge -o jsonpath='{.data.CLIENT_SECRET}' | base64 -d && echo
-```
-
-### Step 5: Configure GitHub Image Pull Secret (if needed)
-
-If using Kagenti, copy the ghcr secret:
-
-```bash
-kubectl get secret ghcr-secret -n team1 -o yaml | sed 's/namespace: team1/namespace: authbridge/' | kubectl apply -f -
-```
-
-### Step 6: Deploy the Demo
-
-```bash
-cd AuthBridge
-
-# With SPIFFE (requires SPIRE)
-kubectl apply -f k8s/authbridge-deployment.yaml
-```
-
-OR without SPIFFE:
-
-```bash
-kubectl apply -f k8s/authbridge-deployment-no-spiffe.yaml
-```
-
-This creates:
-
-- ConfigMaps and Secrets
-- `agent` and `auth-target` deployments
-
-### Step 7: Wait for Deployments
-
-```bash
-kubectl wait --for=condition=available --timeout=180s deployment/agent -n authbridge
-kubectl wait --for=condition=available --timeout=120s deployment/auth-target -n authbridge
-```
-
-### Step 8: Test the Flow
-
-```bash
-# Exec into the agent container
-kubectl exec -it deployment/agent -n authbridge -c agent -- sh
-```
-
-Inside the container (or run as a single command):
-
-```bash
-# Credentials are auto-populated by client-registration
-CLIENT_ID=$(cat /shared/client-id.txt)
-CLIENT_SECRET=$(cat /shared/client-secret.txt)
-
-echo "Client ID: $CLIENT_ID"
-echo "Client Secret: $CLIENT_SECRET"
-
-# Get a token from Keycloak
-TOKEN=$(curl -sX POST http://keycloak-service.keycloak.svc:8080/realms/demo/protocol/openid-connect/token \
-  -d 'grant_type=client_credentials' \
-  -d "client_id=$CLIENT_ID" \
-  -d "client_secret=$CLIENT_SECRET" | jq -r '.access_token')
-
-echo "Token obtained!"
-
-# Verify token audience (should be Agent's SPIFFE ID via self-aud scope)
-echo $TOKEN | cut -d'.' -f2 | tr '_-' '/+' | { read p; echo "${p}=="; } | base64 -d | jq '{aud, azp, scope, iss}'
-
-# Call auth-target (AuthProxy will exchange token for "auth-target" audience)
-curl -H "Authorization: Bearer $TOKEN" http://auth-target-service:8081/test
-
-# Expected output: "authorized"
-```
-
-**Or run the complete test as a single command:**
-
-```bash
-kubectl exec deployment/agent -n authbridge -c agent -- sh -c '
-CLIENT_ID=$(cat /shared/client-id.txt)
-CLIENT_SECRET=$(cat /shared/client-secret.txt)
-TOKEN=$(curl -s http://keycloak-service.keycloak.svc:8080/realms/demo/protocol/openid-connect/token \
-  -d "grant_type=client_credentials" -d "client_id=$CLIENT_ID" -d "client_secret=$CLIENT_SECRET" | jq -r ".access_token")
-echo "Token audience: $(echo $TOKEN | cut -d. -f2 | tr '_-' '/+' | { read p; echo "${p}=="; } | base64 -d | jq -r .aud)"
-echo "Result: $(curl -s -H "Authorization: Bearer $TOKEN" http://auth-target-service:8081/test)"
-'
-```
-
-### Step 9: Inspect Token Claims (Before and After Exchange)
-
-This step shows how the token claims change during the exchange process.
-
-#### View Original Token Claims (Before Exchange)
-
-From inside the caller container, inspect the token obtained from Keycloak:
-
-```bash
-# Get the token
-CLIENT_ID=$(cat /shared/client-id.txt)
-CLIENT_SECRET=$(cat /shared/client-secret.txt)
-TOKEN=$(curl -sX POST http://keycloak-service.keycloak.svc:8080/realms/demo/protocol/openid-connect/token \
-  -d 'grant_type=client_credentials' \
-  -d "client_id=$CLIENT_ID" \
-  -d "client_secret=$CLIENT_SECRET" | jq -r '.access_token')
-
-# Decode and display important claims
-echo "=== ORIGINAL TOKEN (Before Exchange) ==="
-echo $TOKEN | cut -d'.' -f2 | tr '_-' '/+' | { read p; echo "${p}=="; } | base64 -d  | jq '{
-  aud: .aud,
-  azp: .azp,
-  scope: .scope,
-  iss: .iss,
-  sub: .sub,
-  exp: .exp,
-  iat: .iat
-}'
-```
-
-**Expected output:**
-```json
-{
-  "aud": "agent",
-  "azp": "spiffe://localtest.me/ns/authbridge/sa/agent",
-  "scope": "agent-aud profile email",
-  "iss": "http://keycloak.localtest.me:8080/realms/demo",
-  "sub": "3fe8b589-aefa-4377-b735-3c5110ec3ec2",
-  "exp": 1767756190,
-  "iat": 1767755890
-}
-```
-
-Key observations:
-- `aud: agent` - Authorizes the AuthProxy to exchange this token (using static `agent` client)
-- `azp` - The SPIFFE ID of the caller (authorized party / client ID)
-- `scope: agent-aud` - The scope that adds `agent` to the audience
-- **Security model** - The `agent-aud` scope explicitly authorizes token exchange
-
-#### View Exchanged Token Claims (After Exchange)
-
-To see the token after exchange, check the auth-target logs which display the received token:
-
-```bash
-kubectl logs deployment/auth-target -n authbridge | grep -A 20 "JWT Debug"
-```
-
-**Expected output:**
-```shell
-[JWT Debug] Successfully validated token
-[JWT Debug] Audience: [auth-target]
-[JWT Debug] Subject: ...
-```
-
-#### Complete Token Comparison Script
-
-Run this from the caller container to see both tokens side-by-side:
-
-```bash
-kubectl exec deployment/agent -n authbridge -c agent -- sh -c '
-CLIENT_ID=$(cat /shared/client-id.txt)
-CLIENT_SECRET=$(cat /shared/client-secret.txt)
-
-# Get original token
-TOKEN=$(curl -s http://keycloak-service.keycloak.svc:8080/realms/demo/protocol/openid-connect/token \
-  -d "grant_type=client_credentials" \
-  -d "client_id=$CLIENT_ID" \
-  -d "client_secret=$CLIENT_SECRET" | jq -r ".access_token")
-
-echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║           ORIGINAL TOKEN (Before Exchange)                   ║"
-echo "╚══════════════════════════════════════════════════════════════╝"
-echo $TOKEN | cut -d'.' -f2 | tr '_-' '/+' | { read p; echo "${p}=="; } | base64 -d | jq "{aud, azp, scope, iss}"
-
-echo ""
-echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║  Calling auth-target... (token exchange happens here)        ║"
-echo "╚══════════════════════════════════════════════════════════════╝"
-RESULT=$(curl -s -H "Authorization: Bearer $TOKEN" http://auth-target-service:8081/test)
-echo "Result: $RESULT"
-
-echo ""
-echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║  Check auth-target logs for EXCHANGED token claims           ║"
-echo "╚══════════════════════════════════════════════════════════════╝"
-echo "Run: kubectl logs deployment/auth-target -n authbridge | tail -20"
-'
-kubectl logs deployment/auth-target -n authbridge | tail -20
-```
-
-#### Token Claims Summary
-
-| Claim | Before Exchange | After Exchange |
-|-------|-----------------|----------------|
-| `aud` | `agent` | `auth-target` |
-| `azp` | SPIFFE ID (caller) | `agent` |
-| `scope` | `agent-aud profile email` | `auth-target-aud` |
-| `iss` | Keycloak realm | Keycloak realm (same) |
-
-The key changes during token exchange:
-- **`aud`** transforms from `agent` to `auth-target`, allowing the target service to validate the token
-- **`azp`** changes to `agent`, indicating the proxy performed the exchange
-
-**Security Model Benefits:**
-- The `agent-aud` scope explicitly authorizes which proxies can exchange tokens
-- Only authorized proxies (those in the token's audience) can perform token exchange
-- Clear audit trail - you can see which proxy exchanged the token via the `azp` claim
-- Token exchange logic is handled by the sidecar, transparent to the application code
-
-## Verification
-
-### Check Client Registration
-
-```bash
-kubectl logs deployment/agent -n authbridge -c client-registration
-```
-
-You should see:
-
-```shell
-SPIFFE credentials ready!
-Client ID (SPIFFE ID): spiffe://...
-Created Keycloak client "spiffe://..."
-Client registration complete!
-```
-
-### Check Token Exchange
-
-```bash
-kubectl logs deployment/agent -n authbridge -c envoy-proxy 2>&1 | grep -i "token"
-```
-
-You should see:
-
-```shell
-[Token Exchange] All required headers present, attempting token exchange
-[Token Exchange] Successfully exchanged token
-[Token Exchange] Replacing token in Authorization header
-```
-
-### Check Auth Target
-
-```bash
-kubectl logs deployment/auth-target -n authbridge
-```
-
-You should see:
-
-```shell
-[JWT Debug] Successfully validated token
-[JWT Debug] Audience: [auth-target]
-Authorized request: GET /test
-```
-
-## Troubleshooting
-
-### Client Registration Can't Reach Keycloak
-
-**Symptom:** `Connection refused` when connecting to Keycloak
-
-**Fix:** Ensure `OUTBOUND_PORTS_EXCLUDE: "8080"` is set in proxy-init env vars. This excludes Keycloak port from iptables redirect.
-
-### Token Exchange Fails with "Audience not found"
-
-**Symptom:** `{"error":"invalid_client","error_description":"Audience not found"}`
-
-**Fix:** The `auth-target` client must exist in Keycloak. Run `setup_keycloak.py` which creates it.
-
-### Token Exchange Fails with "Client is not within the token audience"
-
-**Symptom:** Token exchange fails with error:
-```
-{"error":"access_denied","error_description":"Client is not within the token audience"}
-```
-
-**Cause:** The caller's token doesn't include `agent` in its audience. Keycloak requires the exchanging client (`agent`) to be in the token's audience for security reasons.
-
-**Fix:** Add the `agent-aud` scope to the caller client:
-
-```bash
-kubectl exec deployment/agent -n authbridge -c agent -- sh -c '
-ADMIN_TOKEN=$(curl -s http://keycloak-service.keycloak.svc:8080/realms/master/protocol/openid-connect/token \
-  -d "grant_type=password" -d "client_id=admin-cli" -d "username=admin" -d "password=admin" | jq -r ".access_token")
-
-SCOPE_ID=$(curl -s -H "Authorization: Bearer $ADMIN_TOKEN" \
-  "http://keycloak-service.keycloak.svc:8080/admin/realms/demo/client-scopes" | \
-  jq -r ".[] | select(.name==\"agent-aud\") | .id")
-
-CLIENT_ID=$(cat /shared/client-id.txt)
-INTERNAL_ID=$(curl -s -H "Authorization: Bearer $ADMIN_TOKEN" \
-  "http://keycloak-service.keycloak.svc:8080/admin/realms/demo/clients?clientId=$CLIENT_ID" | jq -r ".[0].id")
-
-curl -s -X PUT -H "Authorization: Bearer $ADMIN_TOKEN" \
-  "http://keycloak-service.keycloak.svc:8080/admin/realms/demo/clients/$INTERNAL_ID/default-client-scopes/$SCOPE_ID"
-
-echo "Added agent-aud scope to $CLIENT_ID"
-'
-```
-
-**Note:** This is a security feature, not a limitation. The `agent-aud` scope explicitly authorizes the AuthProxy to exchange tokens on behalf of the caller. This prevents unauthorized proxies from exchanging tokens.
-
-### Token Exchange Fails with "Client not enabled to retrieve service account"
-
-**Symptom:** `{"error":"unauthorized_client","error_description":"Client not enabled to retrieve service account"}`
-
-**Fix:** The caller's client needs `serviceAccountsEnabled: true`. This is set in the updated `client_registration.py`.
-
-### curl/jq Not Found in Caller Container
-
-**Symptom:** `sh: curl: not found` or `sh: jq: not found`
-
-**Fix:** The caller container should use `nicolaka/netshoot:latest` image which has these tools pre-installed.
-
-### No Token Received
-
-**Symptom:** `echo $TOKEN=null`
-
-**Fix:** Make sure the `serviceAccountsEnabled` is present in the `client-registration` image.
-
-#### Enable Service Accounts for the Registered Client
-
-The published `client-registration` image doesn't yet have the `serviceAccountsEnabled` fix. Run this to enable it:
-
-```bash
-kubectl exec deployment/agent -n authbridge -c agent -- sh -c '
-CLIENT_ID=$(cat /shared/client-id.txt)
-echo "Enabling service accounts for: $CLIENT_ID"
-
-ADMIN_TOKEN=$(curl -s http://keycloak-service.keycloak.svc:8080/realms/master/protocol/openid-connect/token \
-  -d "grant_type=password" -d "client_id=admin-cli" -d "username=admin" -d "password=admin" | jq -r ".access_token")
-
-INTERNAL_ID=$(curl -s -H "Authorization: Bearer $ADMIN_TOKEN" \
-  "http://keycloak-service.keycloak.svc:8080/admin/realms/demo/clients?clientId=$CLIENT_ID" | jq -r ".[0].id")
-
-curl -s -X PUT -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
-  "http://keycloak-service.keycloak.svc:8080/admin/realms/demo/clients/$INTERNAL_ID" \
-  -d "{\"clientId\": \"$CLIENT_ID\", \"serviceAccountsEnabled\": true}"
-
-echo "Done!"
-'
-```
-
-### View All Logs
-
-```bash
-# Caller pod containers
-kubectl logs deployment/agent -n authbridge -c agent
-kubectl logs deployment/agent -n authbridge -c client-registration
-kubectl logs deployment/agent -n authbridge -c spiffe-helper
-kubectl logs deployment/agent -n authbridge -c auth-proxy
-kubectl logs deployment/agent -n authbridge -c envoy-proxy
-
-# Auth Target
-kubectl logs deployment/auth-target -n authbridge
-```
-
-## Cleanup
-
-```bash
-kubectl delete -f k8s/authbridge-deployment.yaml
-# OR
-kubectl delete -f k8s/authbridge-deployment-no-spiffe.yaml
-
-# Delete the namespace (removes everything)
-kubectl delete namespace authbridge
-```
+## Getting Started
+
+See the **[Demo Guide](./demo.md)** for complete step-by-step instructions on:
+
+- Building and loading images
+- Configuring Keycloak
+- Deploying the demo
+- Testing the token exchange flow
+- Inspecting token claims
+- Troubleshooting common issues
 
 ## Component Documentation
 
@@ -698,3 +277,4 @@ kubectl delete namespace authbridge
 
 - [Kagenti Installation](https://github.com/kagenti/kagenti/blob/main/docs/install.md)
 - [SPIRE Documentation](https://spiffe.io/docs/latest/)
+- [OAuth 2.0 Token Exchange (RFC 8693)](https://www.rfc-editor.org/rfc/rfc8693)

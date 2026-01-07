@@ -3,34 +3,37 @@ setup_keycloak.py - AuthBridge Demo Setup
 
 This script configures Keycloak for the AuthBridge demo that combines:
 1. Client Registration with SPIFFE ID (for the Agent pod identity)
-2. AuthProxy sidecar for token exchange (using agent client)
+2. AuthProxy sidecar for token exchange (using the auto-registered client)
 3. Auth Target (target server) that validates exchanged tokens
 
 Architecture:
-  Caller → gets token (aud: agent) → passes to Agent
+  Caller → gets token (aud: Agent's SPIFFE ID) → passes to Agent
                                               ↓
   Agent Pod (Agent + SPIFFE Helper + Client Registration + AuthProxy)
        |
        | Agent calls Auth Target with Caller's token
        v
-  AuthProxy (Envoy) - validates token, exchanges using agent credentials
+  AuthProxy (Envoy) - validates token, exchanges using Agent's own credentials
        |
        | Token Exchange → audience "auth-target"
        v
   Auth Target (validates token has aud=auth-target)
 
 Clients created:
-- agent: Used by AuthProxy sidecar to exchange tokens (static client)
 - auth-target: Target audience for token exchange (required by Keycloak)
 
 Client Scopes created:
-- agent-aud: Adds "agent" to token audience (realm default)
+- agent-spiffe-aud: Adds Agent's SPIFFE ID to token audience (realm default)
 - auth-target-aud: Adds "auth-target" to token audience (for exchanged tokens)
 
 Note: The Agent workload is auto-registered by the client-registration container
-using the SPIFFE ID as the client ID. The agent-aud scope is added as a realm
-default, so all tokens have "agent" in the audience. This allows the AuthProxy
-(authenticating as the static 'agent' client) to exchange tokens.
+using the SPIFFE ID as the client ID. The agent-spiffe-aud scope adds the Agent's
+SPIFFE ID to all tokens as audience. This allows the AuthProxy (using the same
+auto-registered credentials) to exchange tokens.
+
+IMPORTANT: The SPIFFE ID is hardcoded for the demo:
+  spiffe://localtest.me/ns/authbridge/sa/agent
+If your namespace or service account differs, update AGENT_SPIFFE_ID below.
 """
 
 from keycloak import KeycloakAdmin, KeycloakPostError
@@ -40,6 +43,10 @@ KEYCLOAK_URL = "http://keycloak.localtest.me:8080"
 KEYCLOAK_REALM = "demo"
 KEYCLOAK_ADMIN_USERNAME = "admin"
 KEYCLOAK_ADMIN_PASSWORD = "admin"
+
+# SPIFFE ID for the Agent pod (namespace: authbridge, serviceAccount: agent)
+# Update this if your deployment uses different namespace/serviceAccount
+AGENT_SPIFFE_ID = "spiffe://localtest.me/ns/authbridge/sa/agent"
 
 
 def get_or_create_realm(keycloak_admin, realm_name):
@@ -117,6 +124,7 @@ def main():
     print("=" * 60)
     print("AuthBridge Demo - Keycloak Setup")
     print("=" * 60)
+    print(f"\nAgent SPIFFE ID: {AGENT_SPIFFE_ID}")
     
     # Connect to Keycloak master realm first
     print(f"\nConnecting to Keycloak at {KEYCLOAK_URL}...")
@@ -149,21 +157,6 @@ def main():
         user_realm_name="master"
     )
     
-    # Create agent client (used by AuthProxy sidecar for token exchange)
-    print("\n--- Creating agent client ---")
-    print("This client is used by the AuthProxy sidecar to exchange tokens")
-    agent_id = get_or_create_client(keycloak_admin, {
-        "clientId": "agent",
-        "name": "Agent",
-        "enabled": True,
-        "publicClient": False,
-        "standardFlowEnabled": False,
-        "serviceAccountsEnabled": True,
-        "attributes": {
-            "standard.token.exchange.enabled": "true"
-        }
-    })
-    
     # Create auth-target client (required as token exchange audience target)
     print("\n--- Creating auth-target client ---")
     print("This client is required as the target audience for token exchange")
@@ -182,17 +175,18 @@ def main():
     # Create client scopes
     print("\n--- Creating client scopes ---")
     
-    # agent-aud scope - adds "agent" to token audience (realm default)
-    # This allows the agent client to exchange tokens on behalf of any client
-    agent_scope_id = get_or_create_client_scope(keycloak_admin, {
-        "name": "agent-aud",
+    # agent-spiffe-aud scope - adds Agent's SPIFFE ID to token audience (realm default)
+    # This allows the auto-registered Agent client to exchange tokens
+    print(f"\nCreating scope for Agent's SPIFFE ID audience...")
+    agent_spiffe_scope_id = get_or_create_client_scope(keycloak_admin, {
+        "name": "agent-spiffe-aud",
         "protocol": "openid-connect",
         "attributes": {
             "include.in.token.scope": "true",
             "display.on.consent.screen": "true"
         }
     })
-    add_audience_mapper(keycloak_admin, agent_scope_id, "agent-aud", "agent")
+    add_audience_mapper(keycloak_admin, agent_spiffe_scope_id, "agent-spiffe-aud", AGENT_SPIFFE_ID)
     
     # auth-target-aud scope - added to exchanged tokens
     # This makes the AuthProxy's exchanged token valid for auth-target
@@ -209,60 +203,44 @@ def main():
     # Assign scopes
     print("\n--- Assigning scopes ---")
     
-    # Add agent-aud as realm default scope
+    # Add agent-spiffe-aud as realm default scope
     # This ensures all clients (including auto-registered Agent) get tokens with
-    # "agent" in the audience, allowing AuthProxy to exchange them
+    # the Agent's SPIFFE ID in the audience, allowing AuthProxy to exchange them
     try:
-        keycloak_admin.add_default_default_client_scope(agent_scope_id)
-        print("Added 'agent-aud' as realm default scope (all clients will get it).")
+        keycloak_admin.add_default_default_client_scope(agent_spiffe_scope_id)
+        print("Added 'agent-spiffe-aud' as realm default scope (all clients will get it).")
     except Exception as e:
-        print(f"Note: Could not add 'agent-aud' as realm default (might already exist): {e}")
+        print(f"Note: Could not add 'agent-spiffe-aud' as realm default (might already exist): {e}")
     
-    # agent gets auth-target-aud (so its exchanged tokens target auth-target)
+    # Add auth-target-aud as realm default scope
+    # This allows auto-registered clients to request token exchange with auth-target audience
     try:
-        keycloak_admin.add_client_default_client_scope(agent_id, auth_target_scope_id, {})
-        print("Assigned 'auth-target-aud' as default scope to 'agent'.")
+        keycloak_admin.add_default_default_client_scope(auth_target_scope_id)
+        print("Added 'auth-target-aud' as realm default scope (all clients can use it for token exchange).")
     except Exception as e:
-        print(f"Note: Could not assign 'auth-target-aud' scope to agent (might already exist): {e}")
+        print(f"Note: Could not add 'auth-target-aud' as realm default (might already exist): {e}")
     
-    # auth-target gets auth-target-aud (so tokens for auth-target have correct audience)
-    try:
-        keycloak_admin.add_client_default_client_scope(auth_target_id, auth_target_scope_id, {})
-        print("Assigned 'auth-target-aud' as default scope to 'auth-target'.")
-    except Exception as e:
-        print(f"Note: Could not assign 'auth-target-aud' scope to auth-target (might already exist): {e}")
-    
-    # Retrieve and display secrets
+    # Retrieve and display info
     print("\n" + "=" * 60)
     print("SETUP COMPLETE")
     print("=" * 60)
     
-    try:
-        agent_secret = keycloak_admin.get_client_secrets(agent_id)['value']
-        
-        print("\n--- agent client credentials ---")
-        print(f"Client ID: agent")
-        print(f"Client Secret: {agent_secret}")
-        
-        print("\n" + "=" * 60)
-        print("NEXT STEPS")
-        print("=" * 60)
-        
-        print("\n1. Update the auth-proxy-config secret with the agent client secret:")
-        print(f"\n   kubectl patch secret auth-proxy-config -n authbridge -p '{{\"stringData\":{{\"CLIENT_SECRET\":\"{agent_secret}\"}}}}'\n")
-        
-        print("2. Deploy the AuthBridge demo:")
-        print("\n   # With SPIFFE (requires SPIRE)")
-        print("   kubectl apply -f k8s/authbridge-deployment.yaml")
-        print("\n   # OR without SPIFFE")
-        print("   kubectl apply -f k8s/authbridge-deployment-no-spiffe.yaml\n")
-        
-        print("3. Wait for pods to be ready:")
-        print("\n   kubectl wait --for=condition=available --timeout=120s deployment/agent -n authbridge")
-        print("   kubectl wait --for=condition=available --timeout=120s deployment/auth-target -n authbridge\n")
-        
-        print("4. Test from inside the agent pod:")
-        print("""
+    print("\n" + "=" * 60)
+    print("NEXT STEPS")
+    print("=" * 60)
+    
+    print("\n1. Deploy the AuthBridge demo:")
+    print("\n   # With SPIFFE (requires SPIRE)")
+    print("   kubectl apply -f k8s/authbridge-deployment.yaml")
+    print("\n   # OR without SPIFFE")
+    print("   kubectl apply -f k8s/authbridge-deployment-no-spiffe.yaml\n")
+    
+    print("2. Wait for pods to be ready:")
+    print("\n   kubectl wait --for=condition=available --timeout=120s deployment/agent -n authbridge")
+    print("   kubectl wait --for=condition=available --timeout=120s deployment/auth-target -n authbridge\n")
+    
+    print("3. Test from inside the agent pod:")
+    print(f"""
    kubectl exec -it deployment/agent -n authbridge -c agent -- sh
    
    # Inside the container (credentials are auto-populated by client-registration):
@@ -270,28 +248,41 @@ def main():
    CLIENT_SECRET=$(cat /shared/client-secret.txt)
    
    # Get a token (simulating what a Caller would do)
-   # The token will have aud: agent due to agent-aud realm default scope
+   # The token will have aud: {AGENT_SPIFFE_ID}
    TOKEN=$(curl -sX POST \\
      http://keycloak-service.keycloak.svc:8080/realms/demo/protocol/openid-connect/token \\
      -d 'grant_type=client_credentials' \\
      -d "client_id=$CLIENT_ID" \\
      -d "client_secret=$CLIENT_SECRET" | jq -r '.access_token')
    
-   # Verify token audience (should include "agent")
-   echo $TOKEN | cut -d'.' -f2 | tr '_-' '/+' | { read p; echo "${p}=="; } | base64 -d | jq '{aud, azp, scope}'
+   # Verify token audience (should be the Agent's SPIFFE ID)
+   echo $TOKEN | cut -d'.' -f2 | tr '_-' '/+' | {{ read p; echo "${{p}}=="; }} | base64 -d | jq '{{aud, azp, scope}}'
    
    # Agent calls auth-target (AuthProxy will exchange token for aud: auth-target)
    curl -H "Authorization: Bearer $TOKEN" http://auth-target-service:8081/test
    # Expected: "authorized"
 """)
-        
-        print("\nNote: The Agent is auto-registered by the client-registration container")
-        print("using the SPIFFE ID as client ID. The agent-aud scope is a realm default,")
-        print("so all tokens have 'agent' in the audience. AuthProxy (using the 'agent'")
-        print("client credentials) can exchange these tokens.")
-        
-    except Exception as e:
-        print(f"Could not retrieve secrets: {e}")
+    
+    print("\n" + "-" * 60)
+    print("HOW IT WORKS")
+    print("-" * 60)
+    print(f"""
+1. Agent pod starts and registers with Keycloak using its SPIFFE ID:
+   client_id = {AGENT_SPIFFE_ID}
+
+2. Credentials are saved to /shared/client-id.txt and /shared/client-secret.txt
+
+3. When a Caller gets a token, it has:
+   aud: {AGENT_SPIFFE_ID}  (via agent-spiffe-aud realm default scope)
+
+4. AuthProxy intercepts outgoing requests and exchanges the token using
+   the same credentials from /shared/ (matching the token's audience)
+
+5. The exchanged token has aud: auth-target
+
+No static 'agent' client needed - AuthProxy uses the dynamically registered
+client credentials!
+""")
 
 
 if __name__ == "__main__":
