@@ -343,6 +343,7 @@ psql
 ptr
 py
 quickstart
+README
 rbac
 readiness
 readonly
@@ -458,6 +459,7 @@ versioned
 versioning
 viper
 volumeMounts
+WorkloadPod
 webhook
 webhooks
 whitespace
