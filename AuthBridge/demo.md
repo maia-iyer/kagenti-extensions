@@ -451,7 +451,9 @@ echo "Calling auth-target... (token exchange happens in AuthProxy)"
 RESULT=$(curl -s -H "Authorization: Bearer $TOKEN" http://auth-target-service:8081/test)
 echo "Result: $RESULT"
 '
+```
 
+```bash
 # Step 2: Extract and decode the EXCHANGED token from envoy-proxy logs
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
