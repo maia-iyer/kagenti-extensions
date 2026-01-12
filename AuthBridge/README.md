@@ -38,12 +38,12 @@ AuthBridge solves the challenge of **secure service-to-service authentication** 
 
 **Runtime Flow:**
 ```
-  Caller             Workload Pod              Target Service    Keycloak
+  Caller             Workload Pod              Keycloak      Target Service
     │                     │                        │               │
     │  2. Get token       │                        │               │
     │  (aud: Workload's SPIFFE ID)                 │               │
-    │─────────────────────────────────────────────────────────────►│
-    │◄─────────────────────────────────────────────────────────────│
+    │─────────────────────────────────────────────►│               │
+    │◄─────────────────────────────────────────────│               │
     │  Token (aud: Workload)                       │               │
     │                     │                        │               │
     │  3. Pass token      │                        │               │
@@ -60,15 +60,15 @@ AuthBridge solves the challenge of **secure service-to-service authentication** 
     │                     │          │             │               │
     │                     │  5. Token Exchange     │               │
     │                     │  (using Workload creds)│               │
-    │                     │───────────────────────────────────────►│
-    │                     │◄───────────────────────────────────────│
+    │                     │───────────────────────►│               │
+    │                     │◄───────────────────────│               │
     │                     │  New token (aud: target-service)       │
     │                     │          │             │               │
     │                     │  6. Forward request    │               │
     │                     │  with exchanged token  │               │
-    │                     │───────────────────────►│               │
+    │                     │───────────────────────────────────────►│
     │                     │                        │               │
-    │                     │◄───────────────────────│               │
+    │                     │◄───────────────────────────────────────│
     │                     │  "authorized"          │               │
     │◄────────────────────│                        │               │
     │  Response           │                        │               │
@@ -150,9 +150,9 @@ sequenceDiagram
 │  ┌─────────────────────────────────────────────────────────────────┐   │
 │  │                      Containers                                 │   │
 │  │  ┌──────────────┐  ┌─────────────────┐  ┌────────────────────┐  │   │
-│  │  │  Your App    │  │  SPIFFE Helper  │  │    AuthProxy +     │  │   │
-│  │  │              │  │  (provides      │  │    Envoy + Ext Proc│  │   │
-│  │  │              │  │   SPIFFE creds) │  │  (token exchange)  │  │   │
+│  │  │  Your App    │  │  SPIFFE Helper  │  │      AuthProxy     │  │   │
+│  │  │              │  │  (provides      │  │  (Envoy + Ext Proc │  │   │
+│  │  │              │  │   SPIFFE creds) │  │  = token exchange) │  │   │
 │  │  └──────┬───────┘  └─────────────────┘  └──────────┬─────────┘  │   │
 │  │                                                                 │   │
 │  │  ┌───────────────────────────────────────────────────────────┐  │   │

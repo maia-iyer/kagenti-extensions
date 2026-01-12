@@ -23,8 +23,8 @@ Clients created:
 - auth-target: Target audience for token exchange (required by Keycloak)
 
 Client Scopes created:
-- agent-spiffe-aud: Adds Agent's SPIFFE ID to token audience (realm default)
-- auth-target-aud: Adds "auth-target" to token audience (for exchanged tokens)
+- agent-spiffe-aud: Adds Agent's SPIFFE ID to token audience (realm DEFAULT - auto-included)
+- auth-target-aud: Adds "auth-target" to token audience (realm OPTIONAL - for token exchange only)
 
 Note: The Agent workload is auto-registered by the client-registration container
 using the SPIFFE ID as the client ID. The agent-spiffe-aud scope adds the Agent's
@@ -212,13 +212,14 @@ def main():
     except Exception as e:
         print(f"Note: Could not add 'agent-spiffe-aud' as realm default (might already exist): {e}")
     
-    # Add auth-target-aud as realm default scope
-    # This allows auto-registered clients to request token exchange with auth-target audience
+    # Add auth-target-aud as realm OPTIONAL scope (not default!)
+    # - OPTIONAL means: available to clients for explicit requests, but NOT auto-included in tokens
+    # - This allows token exchange to request this scope without polluting the first token
     try:
-        keycloak_admin.add_default_default_client_scope(auth_target_scope_id)
-        print("Added 'auth-target-aud' as realm default scope (all clients can use it for token exchange).")
+        keycloak_admin.add_default_optional_client_scope(auth_target_scope_id)
+        print("Added 'auth-target-aud' as realm OPTIONAL scope (available for token exchange, not auto-included).")
     except Exception as e:
-        print(f"Note: Could not add 'auth-target-aud' as realm default (might already exist): {e}")
+        print(f"Note: Could not add 'auth-target-aud' as optional scope (might already exist): {e}")
     
     # Retrieve and display info
     print("\n" + "=" * 60)

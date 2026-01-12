@@ -416,9 +416,10 @@ kubectl logs deployment/auth-target -n authbridge | grep -A 20 "JWT Debug"
 
 #### Complete Token Comparison Script
 
-Run this to see both tokens side-by-side:
+Run this to see both tokens (before and after exchange):
 
 ```bash
+# Step 1: Get original token and call auth-target
 kubectl exec deployment/agent -n authbridge -c agent -- sh -c '
 CLIENT_ID=$(cat /shared/client-id.txt)
 CLIENT_SECRET=$(cat /shared/client-secret.txt)
@@ -432,22 +433,54 @@ TOKEN=$(curl -s http://keycloak-service.keycloak.svc:8080/realms/demo/protocol/o
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║           ORIGINAL TOKEN (Before Exchange)                   ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
-echo $TOKEN | cut -d'.' -f2 | tr '_-' '/+' | { read p; echo "${p}=="; } | base64 -d | jq "{aud, azp, scope, iss}"
+echo $TOKEN | cut -d"." -f2 | tr "_-" "/+" | { read p; echo "${p}=="; } | base64 -d | jq "{aud, azp, scope, iss}"
 
 echo ""
-echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║  Calling auth-target... (token exchange happens here)        ║"
-echo "╚══════════════════════════════════════════════════════════════╝"
+echo "Calling auth-target... (token exchange happens in AuthProxy)"
 RESULT=$(curl -s -H "Authorization: Bearer $TOKEN" http://auth-target-service:8081/test)
 echo "Result: $RESULT"
+'
 
+# Step 2: Extract and decode the EXCHANGED token from envoy-proxy logs
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║  Check auth-target logs for EXCHANGED token claims           ║"
+echo "║           EXCHANGED TOKEN (After Exchange)                   ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
-echo "Run: kubectl logs deployment/auth-target -n authbridge | tail -20"
-'
-kubectl logs deployment/auth-target -n authbridge | tail -20
+# Get the exchanged token from the logs (look for "Successfully exchanged token")
+EXCHANGED_TOKEN=$(kubectl logs deployment/agent -n authbridge -c envoy-proxy 2>&1 | \
+  grep -o "Bearer eyJ[^']*" | tail -1 | sed 's/Bearer //')
+if [ -n "$EXCHANGED_TOKEN" ]; then
+  echo $EXCHANGED_TOKEN | cut -d'.' -f2 | tr '_-' '/+' | { read p; echo "${p}=="; } | base64 -d | jq '{aud, azp, scope, iss}'
+else
+  echo "Note: Exchanged token not found in logs. Check envoy-proxy logs manually."
+fi
+```
+
+**Expected output:**
+
+```
+╔══════════════════════════════════════════════════════════════╗
+║           ORIGINAL TOKEN (Before Exchange)                   ║
+╚══════════════════════════════════════════════════════════════╝
+{
+  "aud": "spiffe://localtest.me/ns/authbridge/sa/agent",
+  "azp": "spiffe://localtest.me/ns/authbridge/sa/agent",
+  "scope": "agent-spiffe-aud profile email",
+  "iss": "http://keycloak.localtest.me:8080/realms/demo"
+}
+
+Calling auth-target... (token exchange happens in AuthProxy)
+Result: authorized
+
+╔══════════════════════════════════════════════════════════════╗
+║           EXCHANGED TOKEN (After Exchange)                   ║
+╚══════════════════════════════════════════════════════════════╝
+{
+  "aud": "auth-target",
+  "azp": "spiffe://localtest.me/ns/authbridge/sa/agent",
+  "scope": "openid auth-target-aud",
+  "iss": "http://keycloak.localtest.me:8080/realms/demo"
+}
 ```
 
 #### Token Claims Summary
