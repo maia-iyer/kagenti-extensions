@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +24,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"gopkg.in/yaml.v3"
 )
 
 // Configuration for token exchange
@@ -45,6 +48,20 @@ type tokenExchangeResponse struct {
 	TokenType   string `json:"token_type"`
 	ExpiresIn   int    `json:"expires_in"`
 }
+
+// RouteConfig represents configuration for a single host route
+type RouteConfig struct {
+	Host           string `yaml:"host"`
+	TargetAudience string `yaml:"target_audience,omitempty"`
+	TokenScopes    string `yaml:"token_scopes,omitempty"`
+	TokenURL       string `yaml:"token_url,omitempty"`
+	Passthrough    bool   `yaml:"passthrough,omitempty"`
+}
+
+var globalRoutes []RouteConfig
+var routesMu sync.RWMutex
+
+const defaultRoutesConfigPath = "/etc/authproxy/routes.yaml"
 
 // readFileContent reads the content of a file, trimming whitespace
 func readFileContent(path string) (string, error) {
@@ -105,6 +122,37 @@ func loadConfig() {
 	log.Printf("[Config]   TARGET_SCOPES: %s", globalConfig.TargetScopes)
 }
 
+// loadRoutesConfig loads route-based configuration from YAML file
+func loadRoutesConfig() {
+	configPath := os.Getenv("ROUTES_CONFIG_PATH")
+	if configPath == "" {
+		configPath = defaultRoutesConfigPath
+	}
+
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		log.Printf("[Routes] No routes config at %s, using global config only", configPath)
+		return
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		log.Printf("[Routes] Failed to read routes config: %v", err)
+		return
+	}
+
+	var routes []RouteConfig
+	if err := yaml.Unmarshal(content, &routes); err != nil {
+		log.Printf("[Routes] Failed to parse routes config: %v", err)
+		return
+	}
+
+	routesMu.Lock()
+	globalRoutes = routes
+	routesMu.Unlock()
+
+	log.Printf("[Routes] Loaded %d route configurations", len(routes))
+}
+
 // waitForCredentials waits for credential files to be available
 // This handles the case where client-registration hasn't finished yet
 func waitForCredentials(maxWait time.Duration) bool {
@@ -119,21 +167,21 @@ func waitForCredentials(maxWait time.Duration) bool {
 
 	log.Printf("[Config] Waiting for credential files (max %v)...", maxWait)
 	deadline := time.Now().Add(maxWait)
-	
+
 	for time.Now().Before(deadline) {
 		// Check if both files exist and have content
 		clientID, err1 := readFileContent(clientIDFile)
 		clientSecret, err2 := readFileContent(clientSecretFile)
-		
+
 		if err1 == nil && err2 == nil && clientID != "" && clientSecret != "" {
 			log.Printf("[Config] Credential files are ready")
 			return true
 		}
-		
+
 		log.Printf("[Config] Credentials not ready yet, waiting...")
 		time.Sleep(2 * time.Second)
 	}
-	
+
 	log.Printf("[Config] Timeout waiting for credentials, will use environment variables if available")
 	return false
 }
@@ -229,6 +277,48 @@ func denyRequest(message string) *v3.ProcessingResponse {
 			},
 		},
 	}
+}
+
+// matchHost checks if request host matches a route pattern (supports glob like "*.example.com")
+func matchHost(pattern, host string) bool {
+	if pattern == host {
+		return true
+	}
+	matched, err := filepath.Match(pattern, host)
+	if err != nil {
+		log.Printf("[Routes] Invalid pattern %q: %v", pattern, err)
+		return false
+	}
+	return matched
+}
+
+// findRouteConfig finds matching route for a host (first-match-wins)
+func findRouteConfig(host string) *RouteConfig {
+	routesMu.RLock()
+	defer routesMu.RUnlock()
+
+	// Strip port if present
+	if idx := strings.LastIndex(host, ":"); idx != -1 {
+		if _, err := strconv.Atoi(host[idx+1:]); err == nil {
+			host = host[:idx]
+		}
+	}
+
+	for i := range globalRoutes {
+		if matchHost(globalRoutes[i].Host, host) {
+			log.Printf("[Routes] Host %q matched pattern %q", host, globalRoutes[i].Host)
+			return &globalRoutes[i]
+		}
+	}
+	return nil
+}
+
+// getHostFromHeaders extracts host from :authority (HTTP/2) or Host header
+func getHostFromHeaders(headers []*core.HeaderValue) string {
+	if host := getHeaderValue(headers, ":authority"); host != "" {
+		return host
+	}
+	return getHeaderValue(headers, "host")
 }
 
 // exchangeToken performs OAuth 2.0 Token Exchange (RFC 8693).
@@ -345,6 +435,7 @@ func (p *processor) handleInbound(headers *core.HeaderMap) *v3.ProcessingRespons
 }
 
 // handleOutbound processes outbound traffic by performing token exchange.
+// It supports route-based configuration for per-host audience/scopes/tokenURL.
 func (p *processor) handleOutbound(headers *core.HeaderMap) *v3.ProcessingResponse {
 	log.Println("=== Outbound Request Headers ===")
 	if headers != nil {
@@ -356,7 +447,39 @@ func (p *processor) handleOutbound(headers *core.HeaderMap) *v3.ProcessingRespon
 		}
 	}
 
+	// Extract host and check for route-based configuration
+	requestHost := getHostFromHeaders(headers.Headers)
+	routeConfig := findRouteConfig(requestHost)
+
+	// Handle passthrough routes - skip token exchange
+	if routeConfig != nil && routeConfig.Passthrough {
+		log.Printf("[Routes] Passthrough enabled for host %q, skipping token exchange", requestHost)
+		return &v3.ProcessingResponse{
+			Response: &v3.ProcessingResponse_RequestHeaders{
+				RequestHeaders: &v3.HeadersResponse{},
+			},
+		}
+	}
+
+	// Get global configuration (from files or env vars)
 	clientID, clientSecret, tokenURL, targetAudience, targetScopes := getConfig()
+
+	// Apply route-specific overrides if available
+	if routeConfig != nil {
+		log.Printf("[Routes] Applying route config for host %q", requestHost)
+		if routeConfig.TargetAudience != "" {
+			targetAudience = routeConfig.TargetAudience
+			log.Printf("[Routes] Using route target_audience: %s", targetAudience)
+		}
+		if routeConfig.TokenScopes != "" {
+			targetScopes = routeConfig.TokenScopes
+			log.Printf("[Routes] Using route token_scopes: %s", targetScopes)
+		}
+		if routeConfig.TokenURL != "" {
+			tokenURL = routeConfig.TokenURL
+			log.Printf("[Routes] Using route token_url: %s", tokenURL)
+		}
+	}
 
 	if clientID != "" && clientSecret != "" && tokenURL != "" && targetAudience != "" && targetScopes != "" {
 		log.Println("[Token Exchange] Configuration loaded, attempting token exchange")
@@ -496,6 +619,9 @@ func main() {
 			log.Println("[Inbound] ISSUER not configured, inbound JWT validation disabled")
 		}
 	}
+
+	// Load route-based configuration if available
+	loadRoutesConfig()
 
 	// Start gRPC server
 	port := ":9090"
