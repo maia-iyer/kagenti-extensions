@@ -185,7 +185,7 @@ make deploy
 ```
 
 This deploys:
-- `auth-proxy` - Example application with JWT validation (port 8080) and the AuthProxy sidecar (Envoy + Ext Proc)
+- `auth-proxy` - Example application that demonstrates JWT validation (port 8080) running alongside the AuthProxy sidecar (Envoy + Ext Proc)
 - `demo-app` - Sample target application (port 8081)
 
 ### Step 2: Configure Keycloak
