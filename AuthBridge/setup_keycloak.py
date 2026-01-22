@@ -26,6 +26,10 @@ Client Scopes created:
 - agent-spiffe-aud: Adds Agent's SPIFFE ID to token audience (realm DEFAULT - auto-included)
 - auth-target-aud: Adds "auth-target" to token audience (realm OPTIONAL - for token exchange only)
 
+Demo Users created:
+- alice: Demo user to demonstrate subject (sub) claim preservation through token exchange
+  Username: alice, Password: alice123
+
 Note: The Agent workload is auto-registered by the client-registration container
 using the SPIFFE ID as the client ID. The agent-spiffe-aud scope adds the Agent's
 SPIFFE ID to all tokens as audience. This allows the AuthProxy (using the same
@@ -47,6 +51,15 @@ KEYCLOAK_ADMIN_PASSWORD = "admin"
 # SPIFFE ID for the Agent pod (namespace: authbridge, serviceAccount: agent)
 # Update this if your deployment uses different namespace/serviceAccount
 AGENT_SPIFFE_ID = "spiffe://localtest.me/ns/authbridge/sa/agent"
+
+# Demo user for demonstrating subject preservation
+DEMO_USER = {
+    "username": "alice",
+    "email": "alice@example.com",
+    "firstName": "Alice",
+    "lastName": "Demo",
+    "password": "alice123"
+}
 
 
 def get_or_create_realm(keycloak_admin, realm_name):
@@ -118,6 +131,38 @@ def add_audience_mapper(keycloak_admin, scope_id, mapper_name, audience):
     except Exception as e:
         # Mapper might already exist
         print(f"Note: Could not add mapper '{mapper_name}' (might already exist): {e}")
+
+
+def get_or_create_user(keycloak_admin, user_config):
+    """Create a demo user if it doesn't exist."""
+    username = user_config["username"]
+    
+    # Check if user exists
+    users = keycloak_admin.get_users({"username": username})
+    if users:
+        print(f"User '{username}' already exists.")
+        return users[0]["id"]
+    
+    # Create user
+    try:
+        user_id = keycloak_admin.create_user({
+            "username": username,
+            "email": user_config["email"],
+            "firstName": user_config["firstName"],
+            "lastName": user_config["lastName"],
+            "enabled": True,
+            "emailVerified": True,
+            "credentials": [{
+                "type": "password",
+                "value": user_config["password"],
+                "temporary": False
+            }]
+        })
+        print(f"Created user '{username}' with ID: {user_id}")
+        return user_id
+    except KeycloakPostError as e:
+        print(f"Could not create user '{username}': {e}")
+        raise
 
 
 def main():
@@ -221,6 +266,11 @@ def main():
     except Exception as e:
         print(f"Note: Could not add 'auth-target-aud' as optional scope (might already exist): {e}")
     
+    # Create demo user for demonstrating subject preservation
+    print("\n--- Creating demo user ---")
+    print("This user demonstrates how the subject (sub) claim is preserved during token exchange")
+    get_or_create_user(keycloak_admin, DEMO_USER)
+    
     # Retrieve and display info
     print("\n" + "=" * 60)
     print("SETUP COMPLETE")
@@ -262,6 +312,32 @@ def main():
    # Agent calls auth-target (AuthProxy will exchange token for aud: auth-target)
    curl -H "Authorization: Bearer $TOKEN" http://auth-target-service:8081/test
    # Expected: "authorized"
+""")
+    
+    print("4. Test with a USER TOKEN (demonstrates subject preservation):")
+    print(f"""
+   # Get a token for demo user 'alice' using password grant
+   # This demonstrates how the user's identity (sub claim) is preserved during exchange
+   
+   USER_TOKEN=$(curl -sX POST \\
+     http://keycloak-service.keycloak.svc:8080/realms/demo/protocol/openid-connect/token \\
+     -d 'grant_type=password' \\
+     -d "client_id=$CLIENT_ID" \\
+     -d "client_secret=$CLIENT_SECRET" \\
+     -d 'username={DEMO_USER["username"]}' \\
+     -d 'password={DEMO_USER["password"]}' | jq -r '.access_token')
+   
+   # Check the ORIGINAL token - note the 'sub' claim contains alice's user ID
+   # and 'preferred_username' shows 'alice'
+   echo "=== ORIGINAL TOKEN (user: alice) ==="
+   echo $USER_TOKEN | cut -d'.' -f2 | tr '_-' '/+' | {{ read p; echo "${{p}}=="; }} | base64 -d | jq '{{sub, preferred_username, aud, azp}}'
+   
+   # Call auth-target - token exchange preserves the subject!
+   curl -H "Authorization: Bearer $USER_TOKEN" http://auth-target-service:8081/test
+   # Expected: "authorized"
+   
+   # Check auth-target logs to see alice's subject in the exchanged token:
+   kubectl logs deployment/auth-target -n authbridge | grep -A5 "JWT Debug" | tail -10
 """)
     
     print("\n" + "-" * 60)

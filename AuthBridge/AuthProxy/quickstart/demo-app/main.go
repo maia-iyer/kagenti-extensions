@@ -85,7 +85,18 @@ func validateJWT(tokenString, jwksURL, expectedIssuer, expectedAudience string) 
 	// Log JWT claims for debugging
 	log.Printf("[JWT Debug] Successfully validated token")
 	log.Printf("[JWT Debug] Issuer: %s", token.Issuer())
+	log.Printf("[JWT Debug] Subject: %s", token.Subject())
 	log.Printf("[JWT Debug] Audience: %v", audiences)
+
+	// Extract and log preferred_username if present (shows the actual username)
+	if preferredUsername, ok := token.Get("preferred_username"); ok {
+		log.Printf("[JWT Debug] Preferred Username: %v", preferredUsername)
+	}
+
+	// Extract and log azp (authorized party) if present
+	if azp, ok := token.Get("azp"); ok {
+		log.Printf("[JWT Debug] Authorized Party (azp): %v", azp)
+	}
 
 	// Extract and log scope claim if present
 	if scopeClaim, ok := token.Get("scope"); ok {
