@@ -26,6 +26,8 @@ import (
 
 var nsLog = logf.Log.WithName("namespace-checker")
 
+// DEPRECATED, used by Agent and MCPServer CRs. Remove CheckNamespaceInjectionEnabled after both CRs are deleted and use IsNamespaceInjectionEnabled instead.
+
 // checks if a namespace has injection enabled via labels or annotations
 func CheckNamespaceInjectionEnabled(ctx context.Context, k8sClient client.Client, namespaceName, labelKey, annotationKey string) (bool, error) {
 	nsLog.Info("Checking namespace injection settings", "namespace", namespaceName, "labelKey", labelKey, "annotationKey", annotationKey)
@@ -50,6 +52,30 @@ func CheckNamespaceInjectionEnabled(ctx context.Context, k8sClient client.Client
 	if namespace.Annotations != nil {
 		if namespace.Annotations[annotationKey] == "true" {
 			nsLog.Info("Namespace injection enabled via annotation", "namespace", namespaceName, "annotationKey", annotationKey, "annotationValue", "true")
+			return true, nil
+		}
+	}
+
+	nsLog.Info("Namespace injection not enabled", "namespace", namespaceName)
+	return false, nil
+}
+
+// checks if a namespace has injection enabled via labels or annotations
+func IsNamespaceInjectionEnabled(ctx context.Context, k8sClient client.Client, namespaceName, labelKey string) (bool, error) {
+	nsLog.Info("Checking namespace injection settings", "namespace", namespaceName, "labelKey", labelKey)
+
+	namespace := &corev1.Namespace{}
+	if err := k8sClient.Get(ctx, client.ObjectKey{Name: namespaceName}, namespace); err != nil {
+		nsLog.Error(err, "Failed to fetch namespace", "namespace", namespaceName)
+		return false, err
+	}
+
+	nsLog.Info("Namespace fetched", "namespace", namespaceName, "labels", namespace.Labels, "annotations", namespace.Annotations)
+
+	// Check NS label (e.g., kagenti-enabled: "true")
+	if namespace.Labels != nil {
+		if namespace.Labels[labelKey] == "true" {
+			nsLog.Info("Namespace injection enabled via label", "namespace", namespaceName, "labelKey", labelKey, "labelValue", "true")
 			return true, nil
 		}
 	}

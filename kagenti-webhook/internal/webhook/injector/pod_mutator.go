@@ -36,6 +36,10 @@ const (
 	DefaultNamespaceLabel      = "kagenti-enabled"
 	DefaultNamespaceAnnotation = "kagenti.dev/inject"
 	DefaultCRAnnotation        = "kagenti.dev/inject"
+	// Label selector for authbridge injection
+	AuthBridgeInjectLabel   = "kagenti.io/inject"
+	AuthBridgeInjectValue   = "enabled"
+	AuthBridgeDisabledValue = "disabled"
 )
 
 type PodMutator struct {
@@ -53,6 +57,8 @@ func NewPodMutator(client client.Client, enableClientRegistration bool) *PodMuta
 		NamespaceAnnotation:      DefaultNamespaceAnnotation,
 	}
 }
+
+// DEPRECATED, used by Agent and MCPServer CRs. Remove ShouldMutate after both CRs are deleted and use InjectAuthBridge instead.
 
 // main entry point for pod mutations
 // It checks if injection should occur and performs all necessary mutations
@@ -85,6 +91,39 @@ func (m *PodMutator) MutatePodSpec(ctx context.Context, podSpec *corev1.PodSpec,
 	mutatorLog.Info("Successfully mutated pod spec", "namespace", namespace, "crName", crName, "containers", len(podSpec.Containers), "volumes", len(podSpec.Volumes))
 	return nil
 }
+
+// It checks if injection should occur and performs all necessary mutations
+func (m *PodMutator) InjectAuthBridge(ctx context.Context, podSpec *corev1.PodSpec, namespace, crName string, labels map[string]string) (bool, error) {
+	mutatorLog.Info("InjectAuthBridge called", "namespace", namespace, "crName", crName, "labels", labels)
+
+	shouldMutate, err := m.NeedsMutation(ctx, namespace, labels)
+	if err != nil {
+		mutatorLog.Error(err, "Failed to determine if mutation should occur", "namespace", namespace, "crName", crName)
+		return false, fmt.Errorf("failed to determine if mutation should occur: %w", err)
+	}
+
+	if !shouldMutate {
+		mutatorLog.Info("Skipping mutation (injection not enabled)", "namespace", namespace, "crName", crName)
+		return false, nil // Skip mutation
+	}
+
+	mutatorLog.Info("Mutation enabled - injecting sidecars and volumes", "namespace", namespace, "crName", crName)
+
+	if err := m.InjectSidecars(podSpec, namespace, crName); err != nil {
+		mutatorLog.Error(err, "Failed to inject sidecars", "namespace", namespace, "crName", crName)
+		return false, fmt.Errorf("failed to inject sidecars: %w", err)
+	}
+
+	if err := m.InjectVolumes(podSpec); err != nil {
+		mutatorLog.Error(err, "Failed to inject volumes", "namespace", namespace, "crName", crName)
+		return false, fmt.Errorf("failed to inject volumes: %w", err)
+	}
+
+	mutatorLog.Info("Successfully mutated pod spec", "namespace", namespace, "crName", crName, "containers", len(podSpec.Containers), "volumes", len(podSpec.Volumes))
+	return true, nil
+}
+
+// DEPRECATED, used by Agent and MCPServer CRs. Remove ShouldMutate after both CRs are deleted and use NeedsMutation instead.
 
 // determines if pod mutation should occur based on annotations and namespace labels
 // Priority order:
@@ -122,7 +161,26 @@ func (m *PodMutator) ShouldMutate(ctx context.Context, namespace string, crAnnot
 	}
 	return false, nil
 }
+func (m *PodMutator) NeedsMutation(ctx context.Context, namespace string, labels map[string]string) (bool, error) {
+	mutatorLog.Info("Checking if mutation should occur", "namespace", namespace, "labels", labels)
 
+	value, exists := labels[AuthBridgeInjectLabel]
+
+	// If label exists, respect its value (opt-in or opt-out)
+	if exists {
+		if value == AuthBridgeInjectValue {
+			mutatorLog.Info("Workload label opt-in detected ")
+			return true, nil
+		}
+		// Any other value (including "disabled", "false", etc.) is opt-out
+		mutatorLog.Info("Workload label opt-out detected ")
+		return false, nil
+	}
+
+	// No label - fall back to namespace-level settings
+	mutatorLog.Info("Checking namespace-level injection settings", "namespace", namespace, "label", m.NamespaceLabel)
+	return IsNamespaceInjectionEnabled(ctx, m.Client, namespace, m.NamespaceLabel)
+}
 func (m *PodMutator) InjectSidecars(podSpec *corev1.PodSpec, namespace, crName string) error {
 	if podSpec.Containers == nil {
 		podSpec.Containers = []corev1.Container{}

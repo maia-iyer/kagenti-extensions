@@ -6,7 +6,7 @@ KO_DOCKER_REPO ?= ko.local
 CMD_NAME ?= kagenti-webhook
 IMAGE_TAG ?= $(shell git rev-parse --short HEAD)
 ARCH ?= $(shell go env GOARCH)
-CLUSTER ?= agent-platform
+CLUSTER ?= kagenti
 CONTEXT ?=
 NAMESPACE ?= kagenti-webhook-system
 HELM_OPTS ?= --set image.repository=$(KO_DOCKER_REPO)/$(CMD_NAME) --set image.tag=$(IMAGE_TAG) --set image.pullPolicy=IfNotPresent --set namespaceOverride=$(NAMESPACE) --set namespace.create=false --set image.command=/ko-app/cmd
@@ -191,6 +191,17 @@ reinstall-local-chart: uninstall-local-chart install-local-chart ## Uninstall an
 .PHONY: local-dev
 local-dev: ko-local-build install-local-chart ## Build with ko and deploy to local Kind cluster
 
+.PHONY: quick-deploy
+quick-deploy: ## Quick build and deploy using Docker (updates existing deployment)
+	@cd $(shell pwd) && ./scripts/quick-deploy.sh
+
+.PHONY: full-deploy
+full-deploy: ## Full deployment including webhook configurations
+	@cd $(shell pwd) && ./scripts/full-deploy.sh
+
+.PHONY: deploy-authbridge-webhook
+deploy-authbridge-webhook: ## Deploy only the authbridge webhook configuration
+	@cd $(shell pwd) && ./scripts/deploy-authbridge-webhook.sh
 
 ##@ Dependencies
 

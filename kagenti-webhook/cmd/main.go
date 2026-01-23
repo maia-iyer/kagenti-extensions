@@ -234,6 +234,12 @@ func main() {
 			setupLog.Error(err, "unable to create webhook", "webhook", "Agent")
 			os.Exit(1)
 		}
+
+		// Setup AuthBridge webhook
+		if err = webhooktoolhivestacklokdevv1alpha1.SetupAuthBridgeWebhookWithManager(mgr, podMutator); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "AuthBridge")
+			os.Exit(1)
+		}
 	}
 	// +kubebuilder:scaffold:builder
 

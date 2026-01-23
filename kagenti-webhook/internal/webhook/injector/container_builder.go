@@ -91,7 +91,7 @@ func BuildClientRegistrationContainer(clientID, name, namespace string) corev1.C
 		Command: []string{
 			"/bin/sh",
 			"-c",
-			"if [ "$SPIRE_ENABLED" = "true" ]; then while [ ! -f /opt/jwt_svid.token ]; do echo waiting for SVID; sleep 1; done; fi; python client_registration.py; tail -f /dev/null",
+			`if [ "$SPIRE_ENABLED" = "true" ]; then while [ ! -f /opt/jwt_svid.token ]; do echo waiting for SVID; sleep 1; done; fi; python client_registration.py; tail -f /dev/null`,
 		},
 		Env: []corev1.EnvVar{
 			{
