@@ -43,7 +43,7 @@ const (
 )
 
 func BuildSpiffeHelperContainer() corev1.Container {
-	builderLog.Info("building SpiffyHelper Container")
+	builderLog.Info("building SpiffeHelper Container")
 
 	return corev1.Container{
 		Name:            SpiffeHelperContainerName,
