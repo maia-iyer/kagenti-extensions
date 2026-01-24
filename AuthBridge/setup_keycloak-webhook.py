@@ -33,18 +33,35 @@ Client Scopes created:
 
 Demo Users created:
 - alice: Demo user to demonstrate subject preservation (username: alice, password: alice123)
+
+Security Note:
+- This script uses default Keycloak admin credentials (username: "admin", password: "admin")
+  for demo and local development only. These credentials are insecure and MUST NOT be used
+  in any production or internet-exposed environment. Always override them via environment
+  variables or other secure configuration when running outside a demo context.
 """
 
 import argparse
 import sys
+import os
 from keycloak import KeycloakAdmin, KeycloakPostError
 
 # Default configuration
-KEYCLOAK_URL = "http://keycloak.localtest.me:8080"
-KEYCLOAK_REALM = "demo"
-KEYCLOAK_ADMIN_USERNAME = "admin"
-KEYCLOAK_ADMIN_PASSWORD = "admin"
+# NOTE: The default admin credentials below ("admin"/"admin") are for demo and local
+# development purposes only and must not be used in production. Override them with
+# environment variables when running in any non-demo environment.
+KEYCLOAK_URL = os.environ.get("KEYCLOAK_URL", "http://keycloak.localtest.me:8080")
+KEYCLOAK_REALM = os.environ.get("KEYCLOAK_REALM", "demo")
+KEYCLOAK_ADMIN_USERNAME = os.environ.get("KEYCLOAK_ADMIN_USERNAME", "admin")
+KEYCLOAK_ADMIN_PASSWORD = os.environ.get("KEYCLOAK_ADMIN_PASSWORD", "admin")
 
+# Emit a warning if the insecure demo credentials are in use.
+if KEYCLOAK_ADMIN_USERNAME == "admin" and KEYCLOAK_ADMIN_PASSWORD == "admin":
+    print(
+        "WARNING: Using default Keycloak admin credentials 'admin'/'admin'. "
+        "These credentials are INSECURE and must NOT be used in production.",
+        file=sys.stderr,
+    )
 # Default namespace and service account for webhook deployments
 DEFAULT_NAMESPACE = "team1"
 DEFAULT_SERVICE_ACCOUNT = "agent"
