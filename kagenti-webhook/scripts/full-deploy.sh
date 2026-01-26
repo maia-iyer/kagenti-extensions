@@ -14,6 +14,11 @@ AUTHBRIDGE_NAMESPACE=${AUTHBRIDGE_NAMESPACE:-team1}
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTHBRIDGE_K8S_DIR="${SCRIPT_DIR}/../../AuthBridge/k8s"
 
+if [ ! -d "${AUTHBRIDGE_K8S_DIR}" ]; then
+    echo "Error: AuthBridge k8s directory not found at '${AUTHBRIDGE_K8S_DIR}'." >&2
+    echo "Please verify the repository structure or update the relative path in full-deploy.sh." >&2
+    exit 1
+fi
 echo "=========================================="
 echo "Full Webhook Deployment"
 echo "=========================================="
