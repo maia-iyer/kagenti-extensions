@@ -37,6 +37,7 @@ class ReconcileResult:
     scopes_assigned: int = 0
     hostnames_set: int = 0
     hostnames_skipped: int = 0
+    agent_client_created: bool = False
     errors: int = 0
 
 
@@ -58,7 +59,15 @@ class KeycloakReconciler:
         if agent_client:
             self.agent_client_uuid = self.kc.get_client_id(agent_client)
             if not self.agent_client_uuid:
-                print(f"[WARN] Agent client '{agent_client}' not found in Keycloak")
+                print(f"[MISSING] Agent client '{agent_client}' not found in Keycloak")
+                if self._prompt(f"  Create agent client '{agent_client}'?"):
+                    self.agent_client_uuid = self._create_agent_client(agent_client)
+                    if self.agent_client_uuid:
+                        self.result.agent_client_created = True
+                    else:
+                        self.result.errors += 1
+                else:
+                    print("  --> Skipped")
 
     def reconcile(self, targets: list[RouteTarget]) -> ReconcileResult:
         """Reconcile all targets against Keycloak."""
@@ -202,6 +211,44 @@ class KeycloakReconciler:
             return uuid
         except Exception as e:
             print(f"    --> Error creating client: {e}")
+            return None
+
+    def _create_agent_client(self, client_id: str) -> Optional[str]:
+        """Create an agent client in Keycloak with appropriate settings."""
+        if self.dry_run:
+            print(f"  --> [DRY RUN] Would create agent client '{client_id}'")
+            return "dry-run-id"
+
+        try:
+            payload = {
+                "clientId": client_id,
+                "name": client_id,
+                "enabled": True,
+                "publicClient": False,
+                "standardFlowEnabled": True,
+                "directAccessGrantsEnabled": True,
+                "serviceAccountsEnabled": True,
+                "fullScopeAllowed": False,
+                "attributes": {
+                    "standard.token.exchange.enabled": "true",
+                },
+            }
+            self.kc.create_client(payload)
+            uuid = self.kc.get_client_id(client_id)
+            print(f"  --> Created agent client '{client_id}'")
+
+            # Display the client secret for user reference
+            if uuid:
+                try:
+                    secret = self.kc.get_client_secrets(uuid).get("value")
+                    if secret:
+                        print(f"  --> Client secret: {secret}")
+                except Exception:
+                    pass
+
+            return uuid
+        except Exception as e:
+            print(f"  --> Error creating agent client: {e}")
             return None
 
     def _find_scope(self, scope_name: str) -> Optional[dict]:
@@ -375,6 +422,8 @@ def print_summary(result: ReconcileResult):
     print("\n" + "=" * 50)
     print("Summary:")
     print(f"  {result.targets_checked} targets checked")
+    if result.agent_client_created:
+        print(f"  Agent client created")
     if result.clients_created:
         print(f"  {result.clients_created} clients created")
     if result.clients_skipped:
