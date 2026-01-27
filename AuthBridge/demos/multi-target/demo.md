@@ -73,6 +73,7 @@ This reconciles routes.yaml with Keycloak, creating:
 - `target-alpha`, `target-beta`, `target-gamma` clients (targets)
 - Audience scopes (`target-alpha-aud`, etc.) with audience mappers
 - Hostname attributes on each target client
+- Assigns scopes to the agent client (so it can request tokens for each audience)
 
 The agent client is created automatically by client-registration during deployment.
 
