@@ -186,17 +186,17 @@ authorized
 
 ## Verify Token Exchange
 
-Check the ext-proc logs to see the token exchange in action:
+Check the envoy-proxy logs to see the token exchange in action:
 
 ```bash
-kubectl logs deployment/agent -n authbridge -c ext-proc | grep -i "matched"
+kubectl logs deployment/agent -n authbridge -c envoy-proxy | grep -i "matched\|routes"
 ```
 
 Expected output:
 ```
-[Resolver] Host "target-alpha-service.authbridge.svc.cluster.local" matched "target-alpha-service.authbridge.svc.cluster.local"
-[Resolver] Host "target-beta-service.authbridge.svc.cluster.local" matched "target-beta-service.authbridge.svc.cluster.local"
-[Resolver] Host "target-gamma-service.authbridge.svc.cluster.local" matched "target-gamma-service.authbridge.svc.cluster.local"
+[Routes] Host "target-alpha-service" matched pattern "target-alpha-service"
+[Routes] Host "target-beta-service" matched pattern "target-beta-service"
+[Routes] Host "target-gamma-service" matched pattern "target-gamma-service"
 ```
 
 ## How It Works

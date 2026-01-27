@@ -45,4 +45,4 @@ echo ""
 
 
 ## Step 3. Check AuthBridge Logs
-kubectl logs deployment/agent -n authbridge -c ext-proc | grep -i "matched"
+kubectl logs deployment/agent -n authbridge -c envoy-proxy | grep -i "matched\|routes"
