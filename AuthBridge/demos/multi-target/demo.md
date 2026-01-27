@@ -38,46 +38,7 @@ The AuthProxy automatically exchanges tokens based on the destination host:
 
 ## Setup
 
-### 1. Sync Routes with Keycloak
-
-Port-forward Keycloak:
-
-```bash
-kubectl port-forward service/keycloak-service -n keycloak 8080:8080
-```
-
-Use `keycloak_sync.py` to reconcile the routes configuration with Keycloak:
-
-```bash
-cd AuthBridge
-
-# Create virtual environment (if not already done)
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-
-# Dry run first to see what would be created
-python keycloak_sync.py --config demos/multi-target/routes.yaml --dry-run
-
-# Apply changes (interactive prompts)
-# Use --agent-client to assign scopes to the agent that will perform token exchange
-python keycloak_sync.py --config demos/multi-target/routes.yaml \
-  --agent-client "spiffe://localtest.me/ns/authbridge/sa/agent"
-
-# Or auto-approve all changes
-python keycloak_sync.py --config demos/multi-target/routes.yaml \
-  --agent-client "spiffe://localtest.me/ns/authbridge/sa/agent" --yes
-```
-
-This reconciles routes.yaml with Keycloak, creating:
-- `target-alpha`, `target-beta`, `target-gamma` clients (targets)
-- Audience scopes (`target-alpha-aud`, etc.) with audience mappers
-- Hostname attributes on each target client
-- Assigns scopes to the agent client (so it can request tokens for each audience)
-
-The agent client is created automatically by client-registration during deployment.
-
-### 2. Build Images
+### 1. Build Images
 
 Build the AuthProxy images (includes the ext-proc with route-based exchange):
 
@@ -99,6 +60,48 @@ This builds:
 - `demo-app` - Target service that validates JWT audience
 - `auth-proxy` - Auth proxy container
 - `proxy-init` - iptables init container
+
+### 2. Sync Routes with Keycloak
+
+**Important:** This step must be done before deploying pods, as the client-registration
+init container requires the realm to exist.
+
+Port-forward Keycloak:
+
+```bash
+kubectl port-forward service/keycloak-service -n keycloak 8080:8080
+```
+
+Use `keycloak_sync.py` to reconcile the routes configuration with Keycloak:
+
+```bash
+cd AuthBridge
+
+# Create virtual environment (if not already done)
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# Dry run first to see what would be created
+python keycloak_sync.py --config demos/multi-target/routes.yaml --dry-run
+
+# Apply changes (interactive prompts)
+# Use --agent-client to pre-create the agent and assign scopes to it
+python keycloak_sync.py --config demos/multi-target/routes.yaml \
+  --agent-client "spiffe://localtest.me/ns/authbridge/sa/agent"
+
+# Or auto-approve all changes
+python keycloak_sync.py --config demos/multi-target/routes.yaml \
+  --agent-client "spiffe://localtest.me/ns/authbridge/sa/agent" --yes
+```
+
+This reconciles routes.yaml with Keycloak, creating:
+- The `demo` realm (if it doesn't exist)
+- The agent client (if `--agent-client` is specified and it doesn't exist)
+- `target-alpha`, `target-beta`, `target-gamma` clients (targets)
+- Audience scopes (`target-alpha-aud`, etc.) with audience mappers
+- Hostname attributes on each target client
+- Assigns scopes to the agent client (so it can request tokens for each audience)
 
 ### 3. Deploy the Demo
 
@@ -230,12 +233,22 @@ The `routes.yaml` file maps hosts to token exchange parameters:
 
 ## Cleanup
 
+Use the teardown script to delete k8s resources and the Keycloak realm:
+
 ```bash
-kubectl delete -f demos/multi-target/k8s/authbridge-deployment.yaml
-kubectl delete -f demos/multi-target/k8s/
+./demos/multi-target/teardown-demo.sh
 ```
 
-Or delete the entire namespace:
+The script uses `http://keycloak.localtest.me:8080` by default. Override with `KEYCLOAK_URL` if needed.
+
+Or manually:
+
+```bash
+kubectl delete -f demos/multi-target/k8s/authbridge-deployment.yaml
+kubectl delete -f demos/multi-target/k8s/targets.yaml
+```
+
+To delete the entire namespace:
 
 ```bash
 kubectl delete namespace authbridge
