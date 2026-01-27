@@ -22,10 +22,6 @@ type TargetConfig struct {
 	// Passthrough skips token exchange entirely.
 	// Use for trusted internal services that don't need exchange.
 	Passthrough bool
-
-	// RequireAuthorization checks with the IDP before exchange.
-	// If true, an authorization check is performed before token exchange.
-	RequireAuthorization bool
 }
 
 // TargetResolver maps a destination host to its token exchange configuration.
