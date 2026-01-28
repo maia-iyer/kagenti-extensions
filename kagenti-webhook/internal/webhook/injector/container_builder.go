@@ -95,7 +95,7 @@ func BuildClientRegistrationContainer(clientID, name, namespace string) corev1.C
 func BuildClientRegistrationContainerWithSpireOption(clientID, name, namespace string, spireEnabled bool) corev1.Container {
 	builderLog.Info("building ClientRegistration Container", "spireEnabled", spireEnabled)
 
-	if clientID =="" {
+	if clientID == "" {
 		clientID = namespace + "/" + name
 	}
 
