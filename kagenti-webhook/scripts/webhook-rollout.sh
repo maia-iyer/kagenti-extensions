@@ -1,6 +1,9 @@
 #!/bin/bash
+set -euo pipefail
 
-set -e
+# ==========================================
+# Validation Functions
+# ==========================================
 
 # Validate Kubernetes namespace/name format (DNS-1123 label)
 # Must be lowercase alphanumeric or '-', start with alphanumeric, max 63 chars
@@ -15,11 +18,59 @@ validate_k8s_name() {
     fi
 }
 
+# ==========================================
+# Container Runtime Detection
+# ==========================================
+detect_impl() {
+    # Allow explicit override via environment variable
+    if [ -n "${DOCKER_IMPL-}" ]; then
+        printf '%s\n' "${DOCKER_IMPL}"
+        return
+    fi
+
+    # Try podman first if present
+    if command -v podman >/dev/null 2>&1; then
+        out=$(podman info 2>/dev/null || true)
+        if printf '%s' "$out" | grep -Ei 'apiversion|buildorigin|libpod|podman|version:' >/dev/null 2>&1; then
+            printf 'podman\n'
+            return
+        fi
+    fi
+
+    # Try docker
+    if command -v docker >/dev/null 2>&1; then
+        out=$(docker info 2>/dev/null || true)
+        # If docker info looks like Docker Engine, classify as docker
+        if printf '%s' "$out" | grep -Ei 'client: docker engine|docker engine - community|server:' >/dev/null 2>&1; then
+            printf 'docker\n'
+            return
+        fi
+        # If docker info contains podman/libpod markers, it's actually Podman (symlink case)
+        if printf '%s' "$out" | grep -Ei 'apiversion|buildorigin|libpod|podman|version:' >/dev/null 2>&1; then
+            printf 'podman\n'
+            return
+        fi
+    fi
+
+    printf 'unknown\n'
+}
+
+# ==========================================
 # Configuration
+# ==========================================
 CLUSTER=${CLUSTER:-kagenti}
 NAMESPACE=${NAMESPACE:-kagenti-webhook-system}
 TAG=$(date +%Y%m%d%H%M%S)
-IMAGE_NAME="localhost/kagenti-webhook:${TAG}"
+
+# Detect container runtime
+DETECTED=$(detect_impl)
+
+# Set image name based on detected runtime
+if [ "${DETECTED}" = "podman" ]; then
+    IMAGE_NAME="localhost/kagenti-webhook:${TAG}"
+else
+    IMAGE_NAME="local/kagenti-webhook:${TAG}"
+fi
 
 # AuthBridge demo configuration
 AUTHBRIDGE_DEMO=${AUTHBRIDGE_DEMO:-false}
@@ -27,7 +78,9 @@ AUTHBRIDGE_NAMESPACE=${AUTHBRIDGE_NAMESPACE:-team1}
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTHBRIDGE_K8S_DIR="${SCRIPT_DIR}/../../AuthBridge/k8s"
 
-# Validate all user-controllable inputs
+# ==========================================
+# Input Validation
+# ==========================================
 validate_k8s_name "$CLUSTER" "cluster name"
 validate_k8s_name "$NAMESPACE" "namespace"
 if [ "${AUTHBRIDGE_DEMO}" = "true" ]; then
@@ -36,17 +89,22 @@ fi
 
 if [ ! -d "${AUTHBRIDGE_K8S_DIR}" ]; then
     echo "Error: AuthBridge k8s directory not found at '${AUTHBRIDGE_K8S_DIR}'." >&2
-    echo "Please verify the repository structure or update the relative path in full-deploy.sh." >&2
+    echo "Please verify the repository structure or update the relative path in webhook-rollout.sh." >&2
     exit 1
 fi
+
+# ==========================================
+# Deployment
+# ==========================================
 echo "=========================================="
 echo "Full Webhook Deployment"
 echo "=========================================="
 echo "Cluster: ${CLUSTER}"
 echo "Namespace: ${NAMESPACE}"
+echo "Container runtime: ${DETECTED}"
 echo "Image: ${IMAGE_NAME}"
-echo "AuthBridge Demo: ${AUTHBRIDGE_DEMO}"
 if [ "${AUTHBRIDGE_DEMO}" = "true" ]; then
+    echo "AuthBridge Demo: ${AUTHBRIDGE_DEMO}"
     echo "AuthBridge Namespace: ${AUTHBRIDGE_NAMESPACE}"
 fi
 echo ""
@@ -57,7 +115,10 @@ docker build -f Dockerfile . --tag "${IMAGE_NAME}" --load
 
 echo ""
 echo "[2/4] Loading image into kind cluster..."
-kind load docker-image --name "${CLUSTER}" "${IMAGE_NAME}"
+if ! kind load docker-image --name "${CLUSTER}" "${IMAGE_NAME}" 2>/dev/null; then
+    echo "kind load failed, using docker save workaround..."
+    docker save "${IMAGE_NAME}" | docker exec -i "${CLUSTER}-control-plane" ctr --namespace k8s.io images import -
+fi
 
 # Step 2: Update deployment
 echo ""
@@ -138,7 +199,7 @@ fi
 
 echo ""
 echo "=========================================="
-echo "Webhook Deployment Complete!"
+echo "Deployment Complete!"
 echo "=========================================="
 echo ""
 echo "Current pods:"
@@ -153,13 +214,13 @@ if [ "${AUTHBRIDGE_DEMO}" = "true" ]; then
     echo "=========================================="
     echo "Setting up AuthBridge Demo Prerequisites"
     echo "=========================================="
-    
+
     # Ensure namespace exists with required label
     echo ""
     echo "[AuthBridge 1/2] Creating namespace ${AUTHBRIDGE_NAMESPACE}..."
     kubectl create namespace "${AUTHBRIDGE_NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
     kubectl label namespace "${AUTHBRIDGE_NAMESPACE}" kagenti-enabled=true --overwrite
-    
+
     # Apply ConfigMaps (update namespace in-place)
     # Note: AUTHBRIDGE_NAMESPACE is validated above to be a safe DNS-1123 label,
     # so it cannot contain sed metacharacters like '/' or '&'
@@ -171,7 +232,7 @@ if [ "${AUTHBRIDGE_DEMO}" = "true" ]; then
     else
         echo "Warning: ${AUTHBRIDGE_K8S_DIR}/configmaps-webhook.yaml not found"
     fi
-    
+
     echo ""
     echo "=========================================="
     echo "AuthBridge Prerequisites Ready!"
@@ -181,10 +242,12 @@ if [ "${AUTHBRIDGE_DEMO}" = "true" ]; then
 fi
 
 echo ""
-echo "To view webhook logs:"
+echo "To view logs:"
 echo "  kubectl logs -n ${NAMESPACE} -l control-plane=controller-manager -f"
 echo ""
-echo "Usage with AuthBridge demo:"
-echo "  AUTHBRIDGE_DEMO=true ./scripts/full-deploy.sh"
-echo "  AUTHBRIDGE_DEMO=true AUTHBRIDGE_NAMESPACE=myns ./scripts/full-deploy.sh"
+echo "Usage examples:"
+echo "  ./scripts/webhook-rollout.sh"
+echo "  DOCKER_IMPL=podman ./scripts/webhook-rollout.sh"
+echo "  AUTHBRIDGE_DEMO=true ./scripts/webhook-rollout.sh"
+echo "  AUTHBRIDGE_DEMO=true AUTHBRIDGE_NAMESPACE=myns ./scripts/webhook-rollout.sh"
 echo ""
