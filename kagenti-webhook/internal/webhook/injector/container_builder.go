@@ -32,7 +32,6 @@ const (
 	EnvoyProxyContainerName = "envoy-proxy"
 	ProxyInitContainerName  = "proxy-init"
 
-	// Default images - use localhost for local Kind/minikube clusters
 	// AuthBridge sidecar images from GitHub Container Registry
 	DefaultEnvoyImage     = "ghcr.io/kagenti/kagenti-extensions/envoy-with-processor:latest"
 	DefaultProxyInitImage = "ghcr.io/kagenti/kagenti-extensions/proxy-init:latest"
