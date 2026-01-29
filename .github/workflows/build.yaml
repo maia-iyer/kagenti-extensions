@@ -86,7 +86,7 @@ jobs:
           tags: |
             # Always use the computed tag
             type=raw,value=${{ steps.tag.outputs.tag }}
-            # Add 'latest' tag only for version tags on main
+            # Add 'latest' tag only for version tags
             type=raw,value=latest,enable=${{ github.ref_type == 'tag' && startsWith(github.ref_name, 'v') }}
 
       # 7. Build and push image
