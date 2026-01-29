@@ -33,7 +33,7 @@ const (
 	ProxyInitContainerName  = "proxy-init"
 
 	// Default images - use localhost for local Kind/minikube clusters
-	// TODO: Update to ghcr.io/kagenti/kagenti-extensions/ once images are published
+	// AuthBridge sidecar images from GitHub Container Registry
 	DefaultEnvoyImage     = "ghcr.io/kagenti/kagenti-extensions/envoy-with-processor:latest"
 	DefaultProxyInitImage = "ghcr.io/kagenti/kagenti-extensions/proxy-init:latest"
 
