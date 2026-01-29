@@ -63,15 +63,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 5. Extract Docker metadata (tags from git tag)
+      # 5. Extract Docker metadata (tags from git tag or branch)
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}/${{ matrix.image_config.name }}
           tags: |
+            # Use git tag if available (e.g., v1.0.0)
             type=ref,event=tag
+            # Use branch name for workflow_dispatch or branch pushes
+            type=ref,event=branch
+            # Add 'latest' tag on default branch
             type=raw,value=latest,enable={{is_default_branch}}
+            # Add short SHA for traceability
+            type=sha,prefix=,format=short
 
       # 6. Build and push image
       - name: Build and push ${{ matrix.image_config.name }}
