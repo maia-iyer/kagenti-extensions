@@ -49,6 +49,13 @@ const (
 	// Istio exclusion annotations
 	IstioSidecarInjectAnnotation = "sidecar.istio.io/inject"
 	AmbientRedirectionAnnotation = "ambient.istio.io/redirection"
+
+	// KagentiTypeLabel is the label key that identifies the workload type
+	KagentiTypeLabel = "kagenti.io/type"
+	// KagentiTypeAgent is the label value that identifies agent workloads
+	KagentiTypeAgent = "agent"
+	// KagentiTypeTool is the label value that identifies tool workloads
+	KagentiTypeTool = "tool"
 )
 
 type PodMutator struct {
@@ -195,6 +202,15 @@ func (m *PodMutator) ShouldMutate(ctx context.Context, namespace string, crAnnot
 }
 func (m *PodMutator) NeedsMutation(ctx context.Context, namespace string, labels map[string]string) (bool, error) {
 	mutatorLog.Info("Checking if mutation should occur", "namespace", namespace, "labels", labels)
+
+	// First, check if this is an agent workload (required for authbridge injection)
+	kagentiType, hasKagentiLabel := labels[KagentiTypeLabel]
+	if !hasKagentiLabel || (kagentiType != KagentiTypeAgent && kagentiType != KagentiTypeTool) {
+		mutatorLog.Info("Skipping mutation: workload is not an agent or a tool",
+			"hasLabel", hasKagentiLabel,
+			"labelValue", kagentiType)
+		return false, nil
+	}
 
 	value, exists := labels[AuthBridgeInjectLabel]
 
