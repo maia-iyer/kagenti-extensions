@@ -198,7 +198,7 @@ spec:
       initContainers:
         # Init container to set up iptables for traffic interception
         - name: proxy-init
-          image: localhost/proxy-init:latest
+          image: ghcr.io/kagenti/kagenti-extensions/proxy-init:latest
           imagePullPolicy: IfNotPresent
           securityContext:
             capabilities:
@@ -317,7 +317,7 @@ spec:
               mountPath: /shared
         # AuthProxy - validates and prepares for token exchange
         - name: auth-proxy
-          image: localhost/auth-proxy:latest
+          image: ghcr.io/kagenti/kagenti-extensions/auth-proxy:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
@@ -343,7 +343,7 @@ spec:
               memory: 128Mi
         # Envoy proxy - intercepts outgoing traffic and performs token exchange
         - name: envoy-proxy
-          image: localhost/envoy-with-processor:latest
+          image: ghcr.io/kagenti/kagenti-extensions/envoy-with-processor:latest
           imagePullPolicy: IfNotPresent
           securityContext:
             runAsUser: 1337
@@ -422,7 +422,7 @@ spec:
     spec:
       containers:
         - name: auth-target
-          image: localhost/demo-app:latest
+          image: ghcr.io/kagenti/kagenti-extensions/demo-app:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8081
