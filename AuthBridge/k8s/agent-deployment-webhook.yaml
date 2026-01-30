@@ -6,7 +6,8 @@
 # - kagenti-client-registration (registers with Keycloak)
 # - envoy-proxy (intercepts traffic and performs token exchange)
 #
-# Labels:
+# Labels (must be on Pod template, not just Deployment):
+#   kagenti.io/type: agent      - Required: identifies this as an agent workload
 #   kagenti.io/inject: enabled  - Enables AuthBridge sidecar injection
 #   kagenti.io/spire: enabled   - Enables SPIRE-based identity (optional)
 #
@@ -28,8 +29,6 @@ metadata:
   namespace: team1
   labels:
     app: agent
-    kagenti.io/inject: enabled
-    kagenti.io/spire: enabled
 spec:
   replicas: 1
   selector:
@@ -39,6 +38,9 @@ spec:
     metadata:
       labels:
         app: agent
+        kagenti.io/type: agent
+        kagenti.io/inject: enabled
+        kagenti.io/spire: enabled
     spec:
       serviceAccountName: agent
       containers:
@@ -58,3 +60,6 @@ spec:
           volumeMounts:
             - name: shared-data
               mountPath: /shared
+      volumes:
+        - name: shared-data
+          emptyDir: {}

@@ -32,7 +32,7 @@ spec:
     spec:
       containers:
         - name: auth-target
-          image: localhost/demo-app:latest
+          image: ghcr.io/kagenti/kagenti-extensions/demo-app:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8081

@@ -77,7 +77,7 @@ func (w *AuthBridgeWebhook) Handle(ctx context.Context, req admission.Request) a
 		podSpec = &deployment.Spec.Template.Spec
 		resourceName = deployment.Name
 		mutatedObj = &deployment
-		labels = deployment.Labels
+		labels = deployment.Spec.Template.Labels
 
 	case "StatefulSet":
 		var statefulset appsv1.StatefulSet
@@ -88,7 +88,7 @@ func (w *AuthBridgeWebhook) Handle(ctx context.Context, req admission.Request) a
 		podSpec = &statefulset.Spec.Template.Spec
 		resourceName = statefulset.Name
 		mutatedObj = &statefulset
-		labels = statefulset.Labels
+		labels = statefulset.Spec.Template.Labels
 
 	case "DaemonSet":
 		var daemonset appsv1.DaemonSet
@@ -99,7 +99,7 @@ func (w *AuthBridgeWebhook) Handle(ctx context.Context, req admission.Request) a
 		podSpec = &daemonset.Spec.Template.Spec
 		resourceName = daemonset.Name
 		mutatedObj = &daemonset
-		labels = daemonset.Labels
+		labels = daemonset.Spec.Template.Labels
 
 	case "Job":
 		var job batchv1.Job
@@ -110,7 +110,7 @@ func (w *AuthBridgeWebhook) Handle(ctx context.Context, req admission.Request) a
 		podSpec = &job.Spec.Template.Spec
 		resourceName = job.Name
 		mutatedObj = &job
-		labels = job.Labels
+		labels = job.Spec.Template.Labels
 
 	case "CronJob":
 		var cronjob batchv1.CronJob
@@ -121,7 +121,7 @@ func (w *AuthBridgeWebhook) Handle(ctx context.Context, req admission.Request) a
 		podSpec = &cronjob.Spec.JobTemplate.Spec.Template.Spec
 		resourceName = cronjob.Name
 		mutatedObj = &cronjob
-		labels = cronjob.Labels
+		labels = cronjob.Spec.JobTemplate.Spec.Template.Labels
 
 	default:
 		authbridgelog.Info("Unsupported resource kind", "kind", req.Kind.Kind)
