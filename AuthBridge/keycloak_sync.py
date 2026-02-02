@@ -151,11 +151,6 @@ class KeycloakReconciler:
                 print(f"  [WARN] Scope '{scope_name}' has no audience mapper")
                 if self._prompt(f"    Add audience mapper for '{audience}'?"):
                     self._add_audience_mapper(scope["id"], scope_name, audience)
-            elif mapper.get("config", {}).get("included.custom.audience") != audience:
-                current = mapper.get("config", {}).get("included.custom.audience", "<none>")
-                print(f"  [WARN] Mapper points to '{current}', expected '{audience}'")
-                if self._prompt(f"    Update mapper to '{audience}'?"):
-                    self._update_mapper_audience(scope["id"], mapper["id"], audience)
             else:
                 print(f"  [OK] Audience mapper correctly configured")
 
@@ -318,15 +313,6 @@ class KeycloakReconciler:
             print(f"    --> Added audience mapper")
         except Exception as e:
             print(f"    --> Error adding mapper: {e}")
-
-    def _update_mapper_audience(self, _scope_id: str, _mapper_id: str, audience: str):
-        """Update an existing mapper's audience."""
-        if self.dry_run:
-            print(f"    --> [DRY RUN] Would update mapper audience to '{audience}'")
-            return
-
-        # python-keycloak doesn't have a direct update method, so we delete and recreate
-        print("    --> Updating mapper audience (not yet implemented)")
 
     def _set_hostname_attribute(self, client_id: str, hostname: str):
         """Set the hostname attribute on a client."""
