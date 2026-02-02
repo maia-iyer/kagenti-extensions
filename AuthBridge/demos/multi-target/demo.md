@@ -190,14 +190,14 @@ authorized
 Check the envoy-proxy logs to see the token exchange in action:
 
 ```bash
-kubectl logs deployment/agent -n authbridge -c envoy-proxy | grep -i "matched\|routes"
+kubectl logs deployment/agent -n authbridge -c envoy-proxy | grep -i "matched\|resolver"
 ```
 
 Expected output:
 ```
-[Routes] Host "target-alpha-service" matched pattern "target-alpha-service"
-[Routes] Host "target-beta-service" matched pattern "target-beta-service"
-[Routes] Host "target-gamma-service" matched pattern "target-gamma-service"
+[Resolver] Host "target-alpha-service" matched pattern "target-alpha-service"
+[Resolver] Host "target-beta-service" matched pattern "target-beta-service"
+[Resolver] Host "target-gamma-service" matched pattern "target-gamma-service"
 ```
 
 ## How It Works
