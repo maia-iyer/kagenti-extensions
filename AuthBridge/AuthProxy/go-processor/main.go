@@ -23,7 +23,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/huang195/auth-proxy/go-processor/internal/resolver"
+	"github.com/kagenti/kagenti-extensions/AuthBridge/AuthProxy/go-processor/internal/resolver"
 )
 
 // Configuration for token exchange

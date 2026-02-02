@@ -1,4 +1,4 @@
-module github.com/huang195/auth-proxy
+module github.com/kagenti/kagenti-extensions/AuthBridge/AuthProxy
 
 go 1.23.0
 
