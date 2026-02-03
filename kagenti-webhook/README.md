@@ -15,7 +15,7 @@ This webhook provides security by automatically injecting sidecar containers tha
 The webhook injects:
 
 1. **`proxy-init`** (init container) - Configures iptables rules for traffic interception
-2. **`envoy`** - Service mesh proxy for traffic management
+2. **`envoy-proxy`** - Service mesh proxy for traffic management
 3. **`spiffe-helper`** (optional, if SPIRE enabled) - Obtains SPIFFE Verifiable Identity Documents (SVIDs) from the SPIRE agent via the Workload API
 4. **`kagenti-client-registration`** (optional, if SPIRE enabled) - Registers the resource as an OAuth2 client in Keycloak using the SPIFFE identity
 
@@ -77,7 +77,8 @@ spec:
     metadata:
       labels:
         app: my-app
-        spiffe-enabled: "true"  # Optional: Enable SPIFFE/SPIRE integration
+        kagenti.io/type: agent        # Required: Identifies workload type (agent or tool)
+        kagenti.io/spire: enabled     # Optional: Enable SPIFFE/SPIRE integration
     spec:
       containers:
       - name: app
@@ -111,8 +112,9 @@ spec:
   template:
     metadata:
       labels:
-        kagenti.dev/inject: "true"  # Explicit opt-in via pod label
-        spiffe-enabled: "true"      # Enable SPIRE integration
+        kagenti.io/type: agent       # Required: Identifies workload type (agent or tool)
+        kagenti.io/inject: enabled   # Explicit opt-in via pod label
+        kagenti.io/spire: enabled    # Enable SPIRE integration
     spec:
       containers:
       - name: app
@@ -134,7 +136,7 @@ metadata:
 
 ### SPIRE Integration Control
 
-The AuthBridge webhook supports optional SPIRE integration. Use the `spiffe-enabled` label on pod templates:
+The AuthBridge webhook supports optional SPIRE integration. Use the `kagenti.io/spire` label on pod templates:
 
 ```yaml
 apiVersion: apps/v1
@@ -146,22 +148,25 @@ spec:
   template:
     metadata:
       labels:
-        spiffe-enabled: "true"  # Enables spiffe-helper and client-registration sidecars
+        kagenti.io/type: agent     # Required: Identifies workload type (agent or tool)
+        kagenti.io/spire: enabled  # Enables spiffe-helper and client-registration sidecars
     spec:
       containers:
       - name: app
         image: my-app:latest
 ```
 
-Without the `spiffe-enabled: "true"` label, only the `proxy-init` and `envoy` containers are injected (no SPIRE integration).
+Without the `kagenti.io/spire: enabled` label, only the `proxy-init` and `envoy-proxy` containers are injected (no SPIRE integration).
 
 ### Injection Priority
 
 **For AuthBridge webhook (pod labels):**
-1. **Pod Label (opt-out)**: `kagenti.dev/inject: "false"` - Explicit disable
-2. **Pod Label (opt-in)**: `kagenti.dev/inject: "true"` - Explicit enable
-3. **Namespace Label**: `kagenti-enabled: "true"` - Namespace-wide enable
-4. **Namespace Annotation**: `kagenti.dev/inject: "true"` - Namespace-wide enable
+
+1. **Required Type Label**: `kagenti.io/type: agent` or `kagenti.io/type: tool` - if this label is missing or has any other value, injection is skipped regardless of the other settings.
+2. **Pod Label (opt-out)**: `kagenti.io/inject: disabled` - Explicitly disables injection when it would otherwise be enabled (for example, by namespace configuration).
+3. **Pod Label (opt-in)**: `kagenti.io/inject: enabled` - Explicitly enables injection for this pod.
+4. **Namespace Label**: `kagenti-enabled: "true"` - Namespace-wide enable (applies when the pod does not explicitly opt in or out via `kagenti.io/inject`).
+5. **Namespace Annotation**: `kagenti.io/inject: "enabled"` - Namespace-wide enable (applies when the pod does not explicitly opt in or out via `kagenti.io/inject`).
 
 **For legacy webhooks (CR annotations):**
 1. **CR Annotation (opt-out)**: `kagenti.dev/inject: "false"` - Explicit disable
@@ -175,14 +180,14 @@ Without the `spiffe-enabled: "true"` label, only the `proxy-init` and `envoy` co
 
 The AuthBridge webhook supports two modes of operation:
 
-#### With SPIRE Integration (`spiffe-enabled: "true"` label)
+#### With SPIRE Integration (`kagenti.io/spire: enabled` label)
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
 │                    Kubernetes Workload Pod                     │
 │                                                                │
 │  ┌──────────────┐  ┌────────────┐  ┌─────────────────────────┐│
-│  │  proxy-init  │  │   envoy    │  │   spiffe-helper         ││
+│  │  proxy-init  │  │ envoy-proxy│  │   spiffe-helper         ││
 │  │ (init)       │  │            │  │                         ││
 │  │ - Setup      │  │ - Service  │  │ 1. Connects to SPIRE    ││
 │  │   iptables   │  │   mesh     │  │ 2. Gets JWT-SVID        ││
@@ -210,14 +215,14 @@ The AuthBridge webhook supports two modes of operation:
                        (OAuth2/OIDC)        (via Envoy proxy)
 ```
 
-#### Without SPIRE Integration (default, no `spiffe-enabled` label)
+#### Without SPIRE Integration (default, no `kagenti.io/spire` label)
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
 │                    Kubernetes Workload Pod                     │
 │                                                                │
 │  ┌──────────────┐  ┌────────────────────────────────────────┐ │
-│  │  proxy-init  │  │              envoy                     │ │
+│  │  proxy-init  │  │           envoy-proxy                  │ │
 │  │ (init)       │  │                                        │ │
 │  │ - Setup      │  │ - Service mesh proxy                   │ │
 │  │   iptables   │  │ - Traffic management                   │ │
@@ -285,19 +290,19 @@ The AuthBridge webhook injects the following containers into Kubernetes workload
 
 ##### 1. Proxy Init (`proxy-init`) - Init Container
 
-- **Image**: `localhost/proxy-init:latest` (configurable)
+- **Image**: `ghcr.io/kagenti/kagenti-extensions/proxy-init:latest` (configurable)
 - **Purpose**: Sets up iptables rules to redirect traffic through the Envoy proxy
 - **Resources**: 10m CPU / 64Mi memory (request/limit)
 - **Privileged**: Yes (required for iptables modification)
 
-##### 2. Envoy (`envoy`) - Sidecar Container
+##### 2. Envoy Proxy (`envoy-proxy`) - Sidecar Container
 
-- **Image**: `localhost/envoy-with-processor:latest` (configurable)
+- **Image**: `ghcr.io/kagenti/kagenti-extensions/envoy-with-processor:latest` (configurable)
 - **Purpose**: Service mesh proxy for traffic management and authentication
-- **Resources**: 100m CPU / 128Mi memory (request), 200m CPU / 256Mi memory (limit)
-- **Ports**: 15001 (outbound), 15006 (inbound), 15000 (admin)
+- **Resources**: 50m CPU / 64Mi memory (request), 200m CPU / 256Mi memory (limit)
+- **Ports**: 15123 (envoy-outbound), 9901 (admin), 9090 (ext-proc)
 
-**Injected when `spiffe-enabled: "true"` label is set:**
+**Injected when `kagenti.io/spire: enabled` label is set:**
 
 ##### 3. SPIFFE Helper (`spiffe-helper`) - Sidecar Container
 
@@ -331,9 +336,10 @@ The legacy Agent CR and MCPServer CR webhooks inject only SPIRE-related sidecars
 
 The AuthBridge webhook automatically adds these volumes:
 
-- **`spire-agent-socket`** - HostPath to `/run/spire/agent-sockets` for SPIRE agent access (when SPIRE enabled)
+- **`spire-agent-socket`** - CSI volume (`csi.spiffe.io` driver) providing the SPIRE Workload API socket for SPIRE agent access (when SPIRE enabled)
 - **`spiffe-helper-config`** - ConfigMap containing SPIFFE helper configuration (when SPIRE enabled)
 - **`svid-output`** - EmptyDir for SVID token exchange between sidecars (when SPIRE enabled)
+- **`envoy-config`** - ConfigMap containing Envoy configuration injected by the AuthBridge webhook
 
 #### Legacy Webhooks
 
@@ -428,7 +434,7 @@ All webhooks use the same `PodMutator` instance, ensuring:
 The AuthBridge webhook uses the `InjectAuthBridge()` method which supports:
 
 - Init container injection (proxy-init)
-- Sidecar container injection (envoy, spiffe-helper, client-registration)
+- Sidecar container injection (envoy-proxy, spiffe-helper, client-registration)
 - Optional SPIRE integration via pod labels
 - Support for standard Kubernetes workloads
 
@@ -474,8 +480,9 @@ spec:
     metadata:
       labels:
         app: my-agent
-        kagenti.dev/inject: "true"  # Enable injection via pod label
-        spiffe-enabled: "true"       # Enable SPIRE integration
+        kagenti.io/type: agent       # Required: Identifies workload type (agent or tool)
+        kagenti.io/inject: enabled   # Enable injection via pod label
+        kagenti.io/spire: enabled    # Enable SPIRE integration
     spec:
       containers:
       - name: agent
@@ -485,8 +492,9 @@ spec:
 **Key differences:**
 
 - Use **pod labels** instead of CR annotations for injection control
-- Add `spiffe-enabled: "true"` label to enable SPIRE integration (optional)
-- AuthBridge also injects `proxy-init` (init container) and `envoy` (sidecar) for traffic management
+- Add `kagenti.io/type: agent` (or `tool`) label - required for injection to occur
+- Add `kagenti.io/spire: enabled` label to enable SPIRE integration (optional)
+- AuthBridge also injects `proxy-init` (init container) and `envoy-proxy` (sidecar) for traffic management
 - Standard Kubernetes resources benefit from better tooling and ecosystem support
 
 

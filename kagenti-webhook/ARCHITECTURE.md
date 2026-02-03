@@ -28,7 +28,7 @@ graph TB
         end
 
         subgraph "Builders"
-            CONT[Container Builder<br/>proxy-init, envoy, spiffe-helper]
+            CONT[Container Builder<br/>proxy-init, envoy-proxy, spiffe-helper]
             VOL[Volume Builder]
             NS[Namespace Checker]
         end
@@ -94,7 +94,7 @@ graph TB
 
 ### AuthBridge Webhook - With SPIRE Integration
 
-When `spiffe-enabled: "true"` label is set on the pod template:
+When `kagenti.io/spire: enabled` label is set on the pod template:
 
 ```mermaid
 graph LR
@@ -104,7 +104,7 @@ graph LR
 
     subgraph "AuthBridge Injection"
         INIT[proxy-init<br/>Init Container]
-        ENVOY[envoy<br/>Sidecar]
+        ENVOY[envoy-proxy<br/>Sidecar]
         SPIFFE[spiffe-helper<br/>Sidecar]
         CLIENT[client-registration<br/>Sidecar]
     end
@@ -140,7 +140,7 @@ graph LR
 
     subgraph "AuthBridge Injection"
         INIT[proxy-init<br/>Init Container]
-        ENVOY[envoy<br/>Sidecar]
+        ENVOY[envoy-proxy<br/>Sidecar]
     end
 
     INIT -->|1. Setup iptables| ENVOY
@@ -192,16 +192,16 @@ graph TD
     subgraph "AuthBridge Path (Recommended)"
         WORKLOAD[Standard Workload<br/>Deploy/STS/DS/Job]
         CHECK_NS_AB{Namespace has<br/>kagenti-enabled=true?}
-        CHECK_LABEL{Pod has<br/>kagenti.dev/inject?}
-        CHECK_SPIRE{Pod has<br/>spiffe-enabled=true?}
-        INJECT_FULL[Inject: proxy-init<br/>envoy, spiffe-helper<br/>client-registration]
-        INJECT_BASIC[Inject: proxy-init<br/>envoy only]
+        CHECK_LABEL{Pod has<br/>kagenti.io/inject=enabled}
+        CHECK_SPIRE{Pod has<br/>kagenti.io/spire: enabled?}
+        INJECT_FULL[Inject: proxy-init<br/>envoy-proxy, spiffe-helper<br/>client-registration]
+        INJECT_BASIC[Inject: proxy-init<br/>envoy-proxy only]
     end
 
     subgraph "Legacy Path (Deprecated)"
         CUSTOM[Custom Resource<br/>Agent/MCPServer CR]
         CHECK_NS_LEG{Namespace has<br/>kagenti-enabled=true?}
-        CHECK_ANNO{CR has<br/>kagenti.dev/inject?}
+        CHECK_ANNO{CR has<br/>kagenti.io/inject=enabled?}
         INJECT_SPIRE[Inject: spiffe-helper<br/>client-registration]
     end
 
@@ -243,11 +243,11 @@ graph TD
 |--------|--------------------------|---------------------|
 | **Resources** | Standard K8s workloads | Custom Resources |
 | **Injection Control** | Pod labels | CR annotations |
-| **SPIRE** | Optional (`spiffe-enabled` label) | Always enabled |
-| **Containers** | Init: proxy-init<br/>Sidecars: envoy, spiffe-helper*, client-registration* | Sidecars: spiffe-helper, client-registration |
+| **SPIRE** | Optional (`kagenti.io/spire: enabled` label) | Always enabled |
+| **Containers** | Init: proxy-init<br/>Sidecars: envoy-proxy, spiffe-helper*, client-registration* | Sidecars: spiffe-helper, client-registration |
 | **Traffic Management** | ✅ Envoy proxy with iptables | ❌ No proxy |
 | **Authentication** | Multiple methods (SPIRE, mTLS, JWT, etc.) | SPIRE only |
 | **Method** | `InjectAuthBridge()` | `MutatePodSpec()` |
 
-\* Only injected when `spiffe-enabled: "true"`
+\* Only injected when `kagenti.io/spire: enabled`
 ```
