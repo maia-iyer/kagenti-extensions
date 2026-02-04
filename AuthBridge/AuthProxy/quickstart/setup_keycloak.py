@@ -122,6 +122,16 @@ authproxy_id = get_or_create_client(keycloak_admin, {
     }
 })
 
+# Create demoapp Client (target service for token exchange)
+demoapp_id = get_or_create_client(keycloak_admin, {
+    "clientId": "demoapp",
+    "name": "Demo App",
+    "enabled": True,
+    "publicClient": False,  # Confidential client
+    "standardFlowEnabled": False,
+    "serviceAccountsEnabled": True,
+})
+
 # Create `authproxy-aud` Client scope
 authproxy_scope_id = get_or_create_client_scope(keycloak_admin, {
     "name": "authproxy-aud",

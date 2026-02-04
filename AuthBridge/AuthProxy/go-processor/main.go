@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -14,6 +16,9 @@ import (
 
 	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	v3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
+	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
+	"github.com/lestrrat-go/jwx/v2/jwk"
+	"github.com/lestrrat-go/jwx/v2/jwt"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -140,6 +145,69 @@ func getConfig() (clientID, clientSecret, tokenURL, targetAudience, targetScopes
 	return globalConfig.ClientID, globalConfig.ClientSecret, globalConfig.TokenURL, globalConfig.TargetAudience, globalConfig.TargetScopes
 }
 
+var (
+	jwksCache      *jwk.Cache
+	inboundJWKSURL string
+	inboundIssuer  string
+)
+
+// deriveJWKSURL derives the JWKS URL from the token endpoint URL.
+// e.g. ".../protocol/openid-connect/token" -> ".../protocol/openid-connect/certs"
+func deriveJWKSURL(tokenURL string) string {
+	return strings.TrimSuffix(tokenURL, "/token") + "/certs"
+}
+
+// initJWKSCache initializes the JWKS cache for inbound token validation.
+func initJWKSCache(jwksURL string) {
+	ctx := context.Background()
+	jwksCache = jwk.NewCache(ctx)
+	if err := jwksCache.Register(jwksURL); err != nil {
+		log.Printf("[Inbound] Failed to register JWKS URL %s: %v", jwksURL, err)
+		return
+	}
+	log.Printf("[Inbound] JWKS cache initialized with URL: %s", jwksURL)
+}
+
+// validateInboundJWT validates a JWT token for inbound requests.
+func validateInboundJWT(tokenString, jwksURL, expectedIssuer string) error {
+	if jwksCache == nil {
+		return fmt.Errorf("JWKS cache not initialized")
+	}
+
+	ctx := context.Background()
+	keySet, err := jwksCache.Get(ctx, jwksURL)
+	if err != nil {
+		return fmt.Errorf("failed to fetch JWKS: %w", err)
+	}
+
+	token, err := jwt.Parse([]byte(tokenString), jwt.WithKeySet(keySet), jwt.WithValidate(true))
+	if err != nil {
+		return fmt.Errorf("failed to parse/validate token: %w", err)
+	}
+
+	if token.Issuer() != expectedIssuer {
+		return fmt.Errorf("invalid issuer: expected %s, got %s", expectedIssuer, token.Issuer())
+	}
+
+	log.Printf("[Inbound] Token validated - issuer: %s, audience: %v", token.Issuer(), token.Audience())
+	return nil
+}
+
+// denyRequest returns a ProcessingResponse that sends a 401 Unauthorized to the client.
+func denyRequest(message string) *v3.ProcessingResponse {
+	return &v3.ProcessingResponse{
+		Response: &v3.ProcessingResponse_ImmediateResponse{
+			ImmediateResponse: &v3.ImmediateResponse{
+				Status: &typev3.HttpStatus{
+					Code: typev3.StatusCode_Unauthorized,
+				},
+				Body:    []byte(fmt.Sprintf(`{"error":"unauthorized","message":"%s"}`, message)),
+				Details: "jwt_validation_failed",
+			},
+		},
+	}
+}
+
 // exchangeToken performs OAuth 2.0 Token Exchange (RFC 8693).
 // Exchanges the subject token for a new token with the specified audience.
 // Requires the exchanging client to be in the subject token's audience.
@@ -199,6 +267,130 @@ func getHeaderValue(headers []*core.HeaderValue, key string) string {
 	return ""
 }
 
+// handleInbound processes inbound traffic by validating the JWT token.
+func (p *processor) handleInbound(headers *core.HeaderMap) *v3.ProcessingResponse {
+	log.Println("=== Inbound Request Headers ===")
+	if headers != nil {
+		for _, header := range headers.Headers {
+			if !strings.EqualFold(header.Key, "authorization") &&
+				!strings.EqualFold(header.Key, "x-client-secret") {
+				log.Printf("%s: %s", header.Key, string(header.RawValue))
+			}
+		}
+	}
+
+	if jwksCache == nil || inboundIssuer == "" {
+		log.Println("[Inbound] Inbound validation not configured (ISSUER or TOKEN_URL missing), skipping")
+		return &v3.ProcessingResponse{
+			Response: &v3.ProcessingResponse_RequestHeaders{
+				RequestHeaders: &v3.HeadersResponse{},
+			},
+		}
+	}
+
+	authHeader := getHeaderValue(headers.Headers, "authorization")
+	if authHeader == "" {
+		log.Println("[Inbound] Missing Authorization header")
+		return denyRequest("missing Authorization header")
+	}
+
+	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+	tokenString = strings.TrimPrefix(tokenString, "bearer ")
+	if tokenString == authHeader {
+		log.Println("[Inbound] Invalid Authorization header format")
+		return denyRequest("invalid Authorization header format")
+	}
+
+	if err := validateInboundJWT(tokenString, inboundJWKSURL, inboundIssuer); err != nil {
+		log.Printf("[Inbound] JWT validation failed: %v", err)
+		return denyRequest(fmt.Sprintf("token validation failed: %v", err))
+	}
+
+	log.Println("[Inbound] JWT validation succeeded, forwarding request")
+	// Remove the x-authbridge-direction header so the app never sees it
+	return &v3.ProcessingResponse{
+		Response: &v3.ProcessingResponse_RequestHeaders{
+			RequestHeaders: &v3.HeadersResponse{
+				Response: &v3.CommonResponse{
+					HeaderMutation: &v3.HeaderMutation{
+						RemoveHeaders: []string{"x-authbridge-direction"},
+					},
+				},
+			},
+		},
+	}
+}
+
+// handleOutbound processes outbound traffic by performing token exchange.
+func (p *processor) handleOutbound(headers *core.HeaderMap) *v3.ProcessingResponse {
+	log.Println("=== Outbound Request Headers ===")
+	if headers != nil {
+		for _, header := range headers.Headers {
+			if !strings.EqualFold(header.Key, "authorization") &&
+				!strings.EqualFold(header.Key, "x-client-secret") {
+				log.Printf("%s: %s", header.Key, string(header.RawValue))
+			}
+		}
+	}
+
+	clientID, clientSecret, tokenURL, targetAudience, targetScopes := getConfig()
+
+	if clientID != "" && clientSecret != "" && tokenURL != "" && targetAudience != "" && targetScopes != "" {
+		log.Println("[Token Exchange] Configuration loaded, attempting token exchange")
+		log.Printf("[Token Exchange] Client ID: %s", clientID)
+		log.Printf("[Token Exchange] Target Audience: %s", targetAudience)
+		log.Printf("[Token Exchange] Target Scopes: %s", targetScopes)
+
+		authHeader := getHeaderValue(headers.Headers, "authorization")
+		if authHeader != "" {
+			subjectToken := strings.TrimPrefix(authHeader, "Bearer ")
+			subjectToken = strings.TrimPrefix(subjectToken, "bearer ")
+
+			if subjectToken != authHeader {
+				newToken, err := exchangeToken(clientID, clientSecret, tokenURL, subjectToken, targetAudience, targetScopes)
+				if err == nil {
+					log.Printf("[Token Exchange] Successfully exchanged token, replacing Authorization header")
+					return &v3.ProcessingResponse{
+						Response: &v3.ProcessingResponse_RequestHeaders{
+							RequestHeaders: &v3.HeadersResponse{
+								Response: &v3.CommonResponse{
+									HeaderMutation: &v3.HeaderMutation{
+										SetHeaders: []*core.HeaderValueOption{
+											{
+												Header: &core.HeaderValue{
+													Key:      "authorization",
+													RawValue: []byte("Bearer " + newToken),
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					}
+				}
+				log.Printf("[Token Exchange] Failed to exchange token: %v", err)
+			} else {
+				log.Printf("[Token Exchange] Invalid Authorization header format")
+			}
+		} else {
+			log.Printf("[Token Exchange] No Authorization header found")
+		}
+	} else {
+		log.Println("[Token Exchange] Missing configuration, skipping token exchange")
+		log.Printf("[Token Exchange] CLIENT_ID present: %v, CLIENT_SECRET present: %v, TOKEN_URL present: %v",
+			clientID != "", clientSecret != "", tokenURL != "")
+		log.Printf("[Token Exchange] TARGET_AUDIENCE present: %v, TARGET_SCOPES present: %v",
+			targetAudience != "", targetScopes != "")
+	}
+
+	return &v3.ProcessingResponse{
+		Response: &v3.ProcessingResponse_RequestHeaders{
+			RequestHeaders: &v3.HeadersResponse{},
+		},
+	}
+}
+
 func (p *processor) Process(stream v3.ExternalProcessor_ProcessServer) error {
 	ctx := stream.Context()
 	for {
@@ -217,94 +409,13 @@ func (p *processor) Process(stream v3.ExternalProcessor_ProcessServer) error {
 
 		switch r := req.Request.(type) {
 		case *v3.ProcessingRequest_RequestHeaders:
-			log.Println("=== Request Headers ===")
 			headers := r.RequestHeaders.Headers
-			if headers != nil {
-				for _, header := range headers.Headers {
-					// Don't log sensitive headers
-					if !strings.EqualFold(header.Key, "authorization") &&
-						!strings.EqualFold(header.Key, "x-client-secret") {
-						log.Printf("%s: %s", header.Key, string(header.RawValue))
-					}
-				}
-			}
+			direction := getHeaderValue(headers.Headers, "x-authbridge-direction")
 
-			// Get configuration (from files or env vars)
-			clientID, clientSecret, tokenURL, targetAudience, targetScopes := getConfig()
-
-			// Check if we have all required config
-			if clientID != "" && clientSecret != "" && tokenURL != "" && targetAudience != "" && targetScopes != "" {
-				log.Println("[Token Exchange] Configuration loaded, attempting token exchange")
-				log.Printf("[Token Exchange] Client ID: %s", clientID)
-				log.Printf("[Token Exchange] Target Audience: %s", targetAudience)
-				log.Printf("[Token Exchange] Target Scopes: %s", targetScopes)
-
-				// Extract current JWT from Authorization header
-				authHeader := getHeaderValue(headers.Headers, "authorization")
-				if authHeader != "" {
-					// Extract token from "Bearer <token>" format
-					subjectToken := strings.TrimPrefix(authHeader, "Bearer ")
-					subjectToken = strings.TrimPrefix(subjectToken, "bearer ")
-
-					if subjectToken != authHeader {
-						// Perform token exchange
-						newToken, err := exchangeToken(clientID, clientSecret, tokenURL, subjectToken, targetAudience, targetScopes)
-						if err == nil {
-							log.Printf("[Token Exchange] Successfully exchanged token, replacing Authorization header")
-							// Create header mutation to replace the Authorization header
-							resp = &v3.ProcessingResponse{
-								Response: &v3.ProcessingResponse_RequestHeaders{
-									RequestHeaders: &v3.HeadersResponse{
-										Response: &v3.CommonResponse{
-											HeaderMutation: &v3.HeaderMutation{
-												SetHeaders: []*core.HeaderValueOption{
-													{
-														Header: &core.HeaderValue{
-															Key:      "authorization",
-															RawValue: []byte("Bearer " + newToken),
-														},
-													},
-												},
-											},
-										},
-									},
-								},
-							}
-						} else {
-							log.Printf("[Token Exchange] Failed to exchange token: %v", err)
-							resp = &v3.ProcessingResponse{
-								Response: &v3.ProcessingResponse_RequestHeaders{
-									RequestHeaders: &v3.HeadersResponse{},
-								},
-							}
-						}
-					} else {
-						log.Printf("[Token Exchange] Invalid Authorization header format")
-						resp = &v3.ProcessingResponse{
-							Response: &v3.ProcessingResponse_RequestHeaders{
-								RequestHeaders: &v3.HeadersResponse{},
-							},
-						}
-					}
-				} else {
-					log.Printf("[Token Exchange] No Authorization header found")
-					resp = &v3.ProcessingResponse{
-						Response: &v3.ProcessingResponse_RequestHeaders{
-							RequestHeaders: &v3.HeadersResponse{},
-						},
-					}
-				}
+			if direction == "inbound" {
+				resp = p.handleInbound(headers)
 			} else {
-				log.Println("[Token Exchange] Missing configuration, skipping token exchange")
-				log.Printf("[Token Exchange] CLIENT_ID present: %v, CLIENT_SECRET present: %v, TOKEN_URL present: %v",
-					clientID != "", clientSecret != "", tokenURL != "")
-				log.Printf("[Token Exchange] TARGET_AUDIENCE present: %v, TARGET_SCOPES present: %v",
-					targetAudience != "", targetScopes != "")
-				resp = &v3.ProcessingResponse{
-					Response: &v3.ProcessingResponse_RequestHeaders{
-						RequestHeaders: &v3.HeadersResponse{},
-					},
-				}
+				resp = p.handleOutbound(headers)
 			}
 
 		case *v3.ProcessingRequest_ResponseHeaders:
@@ -340,6 +451,22 @@ func main() {
 
 	// Load configuration from files (or environment variables as fallback)
 	loadConfig()
+
+	// Initialize inbound JWT validation
+	_, _, tokenURL, _, _ := getConfig()
+	inboundIssuer = os.Getenv("ISSUER")
+	if tokenURL != "" && inboundIssuer != "" {
+		inboundJWKSURL = deriveJWKSURL(tokenURL)
+		initJWKSCache(inboundJWKSURL)
+		log.Printf("[Inbound] Issuer: %s", inboundIssuer)
+	} else {
+		if tokenURL == "" {
+			log.Println("[Inbound] TOKEN_URL not configured, inbound JWT validation disabled")
+		}
+		if inboundIssuer == "" {
+			log.Println("[Inbound] ISSUER not configured, inbound JWT validation disabled")
+		}
+	}
 
 	// Start gRPC server
 	port := ":9090"

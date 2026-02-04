@@ -1,6 +1,8 @@
 # AuthProxy
 
-AuthProxy is a **token exchange sidecar** for Kubernetes workloads. It enables secure service-to-service communication by intercepting outgoing requests and transparently exchanging tokens for ones with the correct audience for downstream services.
+AuthProxy is a **token validation and exchange sidecar** for Kubernetes workloads. It enables secure service-to-service communication by:
+- **Validating** incoming requests with JWT token verification (inbound)
+- **Exchanging** tokens for ones with the correct audience for downstream services (outbound)
 
 ## What AuthProxy Does
 
@@ -43,45 +45,52 @@ AuthProxy is a **single sidecar container** that consists of:
 
 ### Envoy Proxy with Ext Proc Filter
 
-The sidecar runs an Envoy proxy with an external processor (ext-proc) filter that:
-- **Envoy Proxy** (port **15123**): Intercepts all outbound HTTP traffic from the application container
-- **Ext Proc Filter** (`go-processor/main.go`, port **9090**): Performs **OAuth 2.0 Token Exchange** ([RFC 8693](https://datatracker.ietf.org/doc/html/rfc8693))
-  - Intercepts HTTP requests via Envoy
-  - Replaces the `Authorization` header with the exchanged token
-  - Works transparently—the caller doesn't know token exchange happened
+The sidecar runs an Envoy proxy with an external processor (ext-proc) filter:
+- **Envoy Proxy** (port **15123** outbound, port **15124** inbound): Intercepts all HTTP traffic from and to the application container
+- **Ext Proc Filter** (`go-processor/main.go`, port **9090**): Handles both directions:
+  - **Inbound**: Validates JWT tokens (signature, issuer) using JWKS. Returns 401 Unauthorized for invalid or missing tokens.
+  - **Outbound**: Performs **OAuth 2.0 Token Exchange** ([RFC 8693](https://datatracker.ietf.org/doc/html/rfc8693)), replacing the `Authorization` header with an exchanged token for the target audience.
+  - Direction is detected via the `x-authbridge-direction` header injected by Envoy's inbound listener.
 
 ### Traffic Interception via iptables
 
-To automatically route traffic from the main application container to the AuthProxy sidecar, an **init container** (`proxy-init`) configures **iptables rules** to redirect all **OUTBOUND** network packets to Envoy. This ensures transparent interception without requiring any changes to the application code.
+To automatically route traffic, an **init container** (`proxy-init`) configures **iptables rules**:
+- **Outbound** (OUTPUT chain): Redirects outgoing traffic to the Envoy outbound listener (port 15123)
+- **Inbound** (PREROUTING chain): Redirects incoming traffic to the Envoy inbound listener (port 15124)
+
+This ensures transparent interception in both directions without requiring any changes to the application code.
 
 ### Example Application (`main.go`)
 
-The `main.go` file in this directory is **not** a core component of AuthProxy. It is an **example application** that demonstrates how to use the AuthProxy sidecar. Any application can benefit from AuthProxy simply by being deployed alongside the sidecar—no code changes required.
+The `main.go` file in this directory is **not** a core component of AuthProxy. It is an **example pass-through proxy** that forwards requests to a target service. JWT validation is handled entirely by the Ext Proc on the inbound path. Any application can benefit from AuthProxy simply by being deployed alongside the sidecar—no code changes required.
 
 ## Architecture
 
 ### Sidecar Deployment
 
-When deployed as a sidecar, AuthProxy intercepts all **outbound** traffic from the application via iptables:
+When deployed as a sidecar, AuthProxy intercepts both **inbound** and **outbound** traffic via iptables:
 
 ```
-┌────────────────────────────────────────────────────────────────┐
-│                             POD                                │
-│                                                                │
-│  ┌─────────────┐       ┌────────────────────────────────────┐  │
-│  │ proxy-init  │       │        AuthProxy Sidecar           │  │
-│  │ (iptables)  │       │                                    │  │
-│  └──────┬──────┘       │  ┌────────────┐    ┌────────────┐  │  │
-│         │              │  │   Envoy    │◄──►│  Ext Proc  │  │  │
-│         │              │  │   :15123   │    │   :9090    │  │  │
-│         ▼              │  └─────┬──────┘    └──────┬─────┘  │  │
-│  ┌─────────────┐       │        │                  │        │  │
-│  │             │       │        │                  │        │  │
-│  │ Application ├───────┼───────►│                  │        │  │
-│  │  (any app)  │       │        │                  │        │  │
-│  └─────────────┘       └────────┼──────────────────┼────────┘  │
-│                                 │                  │           │
-└─────────────────────────────────┼──────────────────┼───────────┘
+                 Incoming request
+                       │
+                       ▼
+┌───────────────────────────────────────────────────────────-───────┐
+│                             POD                                   │
+│                                                                   │
+│  ┌─────────────┐       ┌──────────────────────────────────────┐   │
+│  │ proxy-init  │       │        AuthProxy Sidecar             │   │
+│  │ (iptables)  │       │                                      │   │
+│  └──────┬──────┘       │  ┌────────────┐    ┌────────────┐    │   │
+│         │              │  │   Envoy    │◄──►│  Ext Proc  │    │   │
+│         │              │  │  :15123    │    │   :9090    │    │   │
+│         ▼              │  │  :15124    │    │            │    │   │
+│  ┌─────────────┐       │  └─────┬──────┘    └──────┬─────┘    │   │
+│  │             │◄──────┼────────│ (inbound)        │          │   │
+│  │ Application ├───────┼───────►│ (outbound)       │          │   │
+│  │  (any app)  │       │        │                  │          │   │
+│  └─────────────┘       └────────┼──────────────────┼──────────┘   │
+│                                 │                  │              │
+└─────────────────────────────────┼──────────────────┼──────────────┘
                                   │                  │
                                   ▼                  ▼
                         ┌──────────────────┐  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ┐
@@ -91,8 +100,16 @@ When deployed as a sidecar, AuthProxy intercepts all **outbound** traffic from t
 ```
 
 **How it works:**
-1. **proxy-init** (init container): Sets up iptables rules on the application to redirect all outbound traffic to Envoy
-2. **Envoy** (port 15123): Intercepts redirected traffic, calls Ext Proc via gRPC
+
+**Inbound (incoming requests):**
+1. **proxy-init** (init container): Sets up iptables PREROUTING rules to redirect incoming traffic to Envoy
+2. **Envoy** (port 15124): Intercepts incoming traffic, injects `x-authbridge-direction: inbound` header, calls Ext Proc
+3. **Ext Proc** (port 9090): Validates JWT token (signature + issuer via JWKS). Returns 401 if invalid.
+4. **Envoy**: Forwards validated request to the application
+
+**Outbound (outgoing requests):**
+1. **proxy-init** (init container): Sets up iptables OUTPUT rules to redirect outbound traffic to Envoy
+2. **Envoy** (port 15123): Intercepts outbound traffic, calls Ext Proc via gRPC
 3. **Ext Proc** (port 9090): Performs OAuth 2.0 token exchange with Keycloak, returns modified headers to Envoy
 4. **Envoy**: Applies the new Authorization header and forwards the request to the target service
 
@@ -107,6 +124,7 @@ The Ext Proc reads token exchange configuration directly from environment variab
 | Variable | Description | Source |
 |----------|-------------|--------|
 | `TOKEN_URL` | Keycloak token endpoint URL | Environment variable |
+| `ISSUER` | Expected JWT issuer for inbound validation. Must match Keycloak's frontend URL (the `iss` claim in tokens). Required for inbound JWT validation. | Environment variable |
 | `CLIENT_ID` | Client ID for token exchange | `/shared/client-id.txt` file or `CLIENT_ID` env var |
 | `CLIENT_SECRET` | Client secret | `/shared/client-secret.txt` file or `CLIENT_SECRET` env var |
 | `TARGET_AUDIENCE` | Target service audience | Environment variable |
@@ -125,6 +143,7 @@ metadata:
   name: auth-proxy-config
 stringData:
   TOKEN_URL: "http://keycloak:8080/realms/demo/protocol/openid-connect/token"
+  ISSUER: "http://keycloak.example.com:8080/realms/demo"  # Required: must match Keycloak's frontend URL (iss claim in tokens)
   CLIENT_ID: "auth_proxy"
   CLIENT_SECRET: "<your-client-secret>"
   TARGET_AUDIENCE: "target-service"
@@ -185,8 +204,8 @@ make deploy
 ```
 
 This deploys:
-- `auth-proxy` - Example application that demonstrates JWT validation (port 8080) running alongside the AuthProxy sidecar (Envoy + Ext Proc)
-- `demo-app` - Sample target application (port 8081)
+- `auth-proxy` - Example pass-through proxy (port 8080) running alongside the AuthProxy sidecar (Envoy + Ext Proc). JWT validation is handled by the inbound Ext Proc.
+- `demo-app` - Sample target application (port 8081) that validates exchanged tokens
 
 ### Step 2: Configure Keycloak
 
@@ -211,60 +230,34 @@ python setup_keycloak.py
 ```
 
 The script creates:
-- `application-caller` client - for obtaining tokens
-- `auth_proxy` client - for token exchange
-- `demo-app` client - target audience
+- `application-caller` client - for obtaining tokens (password grant)
+- `authproxy` client - for token exchange
+- `demoapp` client - target audience for token exchange
+- `authproxy-aud` and `demoapp-aud` scopes
 - A test user (`test-user` / `password`)
 
-**Copy the exported `CLIENT_SECRET` from the script output.**
+### Step 3: Create auth-proxy-config Secret and Test
 
-### Step 3: Test the Flow
-
-Port-forward the example application service (in a separate terminal):
-
-```bash
-kubectl port-forward svc/auth-proxy-service 9090:8080
-```
-
-Get a token and test:
-
-```bash
-# Export the CLIENT_SECRET from Step 2
-export CLIENT_SECRET="<from-setup-script>"
-
-# Get an access token
-export ACCESS_TOKEN=$(curl -sX POST \
-  "http://keycloak.localtest.me:8080/realms/demo/protocol/openid-connect/token" \
-  -d "grant_type=password" \
-  -d "client_id=application-caller" \
-  -d "client_secret=$CLIENT_SECRET" \
-  -d "username=test-user" \
-  -d "password=password" | jq -r '.access_token')
-
-# Valid request (will be forwarded to demo-app)
-curl -H "Authorization: Bearer $ACCESS_TOKEN" http://localhost:9090/test
-# Expected: "authorized"
-
-# Invalid token (will be rejected)
-curl -H "Authorization: Bearer invalid-token" http://localhost:9090/test
-# Expected: "Unauthorized - invalid token"
-
-# No token (will be rejected)
-curl http://localhost:9090/test
-# Expected: "Unauthorized - invalid token"
-```
+Create the secret for token exchange credentials, then test the flow. See the [Quickstart Guide](./quickstart/README.md) for detailed instructions covering:
+- Creating the `auth-proxy-config` Kubernetes Secret
+- Port-forwarding the services
+- Testing inbound validation (401 for missing/invalid tokens)
+- Testing outbound token exchange (200 for valid tokens)
 
 ### View Logs
 
 ```bash
 # Example application logs
-kubectl logs deployment/auth-proxy
+kubectl logs deployment/auth-proxy -c auth-proxy
+
+# Ext proc logs (inbound validation + outbound token exchange)
+kubectl logs deployment/auth-proxy -c envoy-proxy
 
 # Demo app (target service) logs
 kubectl logs deployment/demo-app
 
-# Follow logs in real-time
-kubectl logs -f deployment/auth-proxy
+# Follow ext proc logs in real-time
+kubectl logs -f deployment/auth-proxy -c envoy-proxy
 ```
 
 ### Clean Up
