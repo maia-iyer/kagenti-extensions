@@ -1,22 +1,22 @@
 """
-setup_keycloak-webhook.py - Keycloak Setup for AuthBridge
+setup_keycloak.py - Keycloak Setup for AuthBridge
 
 This script configures Keycloak for AuthBridge: both webhook-based deployments
 and the standalone demo. Use --namespace and --service-account to match your
 deployment (any namespace for webhook; authbridge/agent for the standalone demo).
 
 Usage:
-  python setup_keycloak-webhook.py [--namespace NAMESPACE] [--service-account SA]
+  python setup_keycloak.py [--namespace NAMESPACE] [--service-account SA]
 
 Examples:
   # Standalone demo (authbridge namespace): run this, then deploy k8s/authbridge-deployment.yaml
-  python setup_keycloak-webhook.py --namespace authbridge --service-account agent
+  python setup_keycloak.py --namespace authbridge --service-account agent
 
   # Webhook deployment (default: team1 namespace, agent service account)
-  python setup_keycloak-webhook.py
+  python setup_keycloak.py
 
   # Custom namespace and service account
-  python setup_keycloak-webhook.py --namespace myapp --service-account mysa
+  python setup_keycloak.py --namespace myapp --service-account mysa
 
 Architecture:
   Workload with label 'kagenti.io/inject: enabled'
@@ -190,7 +190,7 @@ def get_or_create_user(keycloak_admin, user_config):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Setup Keycloak for AuthBridge webhook deployments"
+        description="Setup Keycloak for AuthBridge (demo and webhook deployments)"
     )
     parser.add_argument(
         "--namespace", "-n",
@@ -209,7 +209,7 @@ def main():
     agent_spiffe_id = get_spiffe_id(namespace, service_account)
 
     print("=" * 70)
-    print("AuthBridge Webhook - Keycloak Setup")
+    print("AuthBridge - Keycloak Setup")
     print("=" * 70)
     print(f"\nNamespace:       {namespace}")
     print(f"Service Account: {service_account}")

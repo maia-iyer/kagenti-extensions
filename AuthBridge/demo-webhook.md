@@ -99,13 +99,13 @@ cd AuthBridge
 source venv/bin/activate
 
 # Run setup for webhook deployment (default: team1 namespace, agent service account)
-python setup_keycloak-webhook.py
+python setup_keycloak.py
 ```
 
 Or specify custom namespace/service account:
 
 ```bash
-python setup_keycloak-webhook.py --namespace myapp --service-account mysa
+python setup_keycloak.py --namespace myapp --service-account mysa
 ```
 
 This creates:
@@ -280,7 +280,7 @@ kubectl logs deployment/agent -n team1 -c spiffe-helper
 
 2. **"Requested audience not available: auth-target"**
    - Ensure `TARGET_SCOPES` in `authbridge-config` includes `auth-target-aud`
-   - Run `setup_keycloak-webhook.py` to create the required scopes
+   - Run `setup_keycloak.py` to create the required scopes
 
 3. **ConfigMap not found errors**
    - Apply `k8s/configmaps-webhook.yaml` to the target namespace
@@ -321,7 +321,7 @@ kubectl logs deployment/agent -n team1 -c spiffe-helper
 | `k8s/agent-deployment-webhook.yaml` | Agent deployment with SPIFFE (webhook labels) |
 | `k8s/agent-deployment-webhook-no-spiffe.yaml` | Agent deployment without SPIFFE (static client ID) |
 | `k8s/auth-target-deployment-webhook.yaml` | Auth target deployment (no injection) |
-| `setup_keycloak-webhook.py` | Keycloak setup script for webhook deployments |
+| `setup_keycloak.py` | Keycloak setup script for AuthBridge (demo and webhook) |
 | `../kagenti-webhook/scripts/webhook-rollout.sh` | Automated deployment script (use with `AUTHBRIDGE_DEMO=true`) |
 
 ## Cleanup

@@ -207,7 +207,7 @@ sequenceDiagram
 | Step | Component | Action | Verification |
 |------|-----------|--------|--------------|
 | 1 | SPIRE → spiffe-helper | Issue SVID | Pod receives cryptographic identity (SPIFFE ID) |
-| 2 | setup_keycloak-webhook.py | Configure realm | Run with `--namespace authbridge --service-account agent`. Creates `demo` realm, `auth-target` client, scopes, and demo user `alice` |
+| 2 | setup_keycloak.py | Configure realm | Run with `--namespace authbridge --service-account agent`. Creates `demo` realm, `auth-target` client, scopes, and demo user `alice` |
 | 3 | client-registration → Keycloak | Register client | Keycloak client created with `client_id = SPIFFE ID` |
 | 4 | agent → Keycloak | Get token | Token issued with `aud: SPIFFE ID`, `scope: agent-authbridge-agent-aud` |
 | 5 | agent → envoy-proxy | HTTP request | Envoy intercepts outbound traffic to auth-target |
@@ -266,7 +266,7 @@ pip install --upgrade pip
 pip install -r requirements.txt
 
 # Run setup script (use authbridge/agent for the standalone demo)
-python setup_keycloak-webhook.py --namespace authbridge --service-account agent
+python setup_keycloak.py --namespace authbridge --service-account agent
 ```
 
 The script creates:
@@ -564,7 +564,7 @@ Authorized request: GET /test
 
 **Symptom:** `{"error":"invalid_client","error_description":"Audience not found"}`
 
-**Fix:** The `auth-target` client must exist in Keycloak. Run `setup_keycloak-webhook.py --namespace authbridge --service-account agent` which creates it.
+**Fix:** The `auth-target` client must exist in Keycloak. Run `setup_keycloak.py --namespace authbridge --service-account agent` which creates it.
 
 ### Token Exchange Fails with "Client is not within the token audience"
 
