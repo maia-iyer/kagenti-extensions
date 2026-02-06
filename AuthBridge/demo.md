@@ -24,7 +24,8 @@ The demo deploys the following components:
 │  │  │                    AuthProxy Sidecar                          │  │    │
 │  │  │  ┌────────────┐  ┌──────────────┐  ┌────────────────────────┐ │  │    │
 │  │  │  │ auth-proxy │  │ envoy-proxy  │  │       ext-proc         │ │  │    │
-│  │  │  │  (8080)    │  │   (15123)    │  │  (token exchange)      │ │  │    │
+│  │  │  │  (8080)    │  │ (15123 out)  │  │  (inbound: JWT valid.) │ │  │    │
+│  │  │  │            │  │ (15124 in)   │  │  (outbound: token xch) │ │  │    │
 │  │  │  └────────────┘  └──────────────┘  └────────────────────────┘ │  │    │
 │  │  └───────────────────────────────────────────────────────────────┘  │    │
 │  └─────────────────────────────────────────────────────────────────────┘    │
@@ -64,8 +65,8 @@ flowchart TB
             clientreg["client-registration"]
             subgraph Sidecar["AuthProxy Sidecar"]
                 authproxy["auth-proxy<br/>:8080"]
-                envoy["envoy-proxy<br/>:15123"]
-                extproc["ext-proc<br/>(token exchange)"]
+                envoy["envoy-proxy<br/>:15123 (out) :15124 (in)"]
+                extproc["ext-proc<br/>(inbound: JWT validation)<br/>(outbound: token exchange)"]
             end
         end
         
@@ -137,7 +138,19 @@ The following diagram shows the complete token flow from initialization through 
        │                        │                    │                    │
        │                   ┌────┴────┐               │                    │
        │                   │ Envoy   │               │                    │
-       │                   │intercepts               │                    │
+       │                   │inbound  │               │                    │
+       │                   │intercept│               │                    │
+       │                   └────┬────┘               │                    │
+       │                        │                    │                    │
+       │                        │ 4b. Validate JWT   │                    │
+       │                        │     (ext-proc)     │                    │
+       │                        │     ✓ signature    │                    │
+       │                        │     ✓ issuer       │                    │
+       │                        │                    │                    │
+       │                   ┌────┴────┐               │                    │
+       │                   │ Envoy   │               │                    │
+       │                   │outbound │               │                    │
+       │                   │intercept│               │                    │
        │                   └────┬────┘               │                    │
        │                        │                    │                    │
        │                        │ 5. Token Exchange  │                    │
@@ -210,8 +223,9 @@ sequenceDiagram
 | 2 | setup_keycloak.py | Configure realm | Creates `demo` realm, `auth-target` client, scopes, and demo user `alice` |
 | 3 | client-registration → Keycloak | Register client | Keycloak client created with `client_id = SPIFFE ID` |
 | 4 | agent → Keycloak | Get token | Token issued with `aud: SPIFFE ID`, `scope: agent-spiffe-aud` |
-| 5 | agent → envoy-proxy | HTTP request | Envoy intercepts outbound traffic to auth-target |
-| 6 | ext-proc → Keycloak | Token Exchange | Token exchanged: `aud: SPIFFE ID` → `aud: auth-target` |
+| 5 | agent → envoy-proxy | HTTP request | Envoy intercepts inbound traffic, Ext Proc validates JWT (signature + issuer) |
+| 5b | ext-proc | Inbound validation | JWT signature validated via JWKS, issuer checked against `ISSUER` env var, 401 returned if invalid |
+| 6 | ext-proc → Keycloak | Token Exchange | Outbound: token exchanged: `aud: SPIFFE ID` → `aud: auth-target` |
 | 7 | envoy-proxy → auth-target | Forward request | Request sent with exchanged token |
 | 7b | Subject preservation | User token exchange | `sub` and `preferred_username` preserved through exchange |
 | 8 | auth-target | Validate token | Token validated (`aud: auth-target`), returns `"authorized"` |
@@ -319,97 +333,120 @@ kubectl wait --for=condition=available --timeout=120s deployment/auth-target -n 
 
 ### Step 6: Test the Flow
 
-First, exec into the agent container:
+These tests verify both **inbound** JWT validation and **outbound** token exchange end-to-end. By sending requests from outside the agent pod, each request exercises the full pipeline:
+
+1. **Inbound**: Envoy intercepts the incoming request, ext-proc validates the JWT (signature + issuer)
+2. **Outbound**: auth-proxy forwards to auth-target, Envoy intercepts the outgoing request, ext-proc exchanges the token
+
+#### Setup
 
 ```bash
-kubectl exec -it deployment/agent -n authbridge -c agent -- sh
-```
+# Get the agent pod IP (requests must come from outside the pod to hit inbound validation)
+AGENT_POD_IP=$(kubectl get pod -l app=agent -n authbridge -o jsonpath='{.items[0].status.podIP}')
 
-The following tests can be run inside the container. Credentials are auto-populated by client-registration:
-
-```bash
-CLIENT_ID=$(cat /shared/client-id.txt)
-CLIENT_SECRET=$(cat /shared/client-secret.txt)
-echo "Client ID: $CLIENT_ID"
-```
-
-#### 6a. Service Account Flow (client_credentials grant)
-
-This flow uses the Agent's service account - the `sub` claim will be the service account ID:
-
-```bash
 # Get a service account token
-TOKEN=$(curl -sX POST http://keycloak-service.keycloak.svc:8080/realms/demo/protocol/openid-connect/token \
-  -d 'grant_type=client_credentials' \
-  -d "client_id=$CLIENT_ID" \
-  -d "client_secret=$CLIENT_SECRET" | jq -r '.access_token')
+TOKEN=$(kubectl exec deployment/agent -n authbridge -c agent -- sh -c '
+  CLIENT_ID=$(cat /shared/client-id.txt)
+  CLIENT_SECRET=$(cat /shared/client-secret.txt)
+  curl -s http://keycloak-service.keycloak.svc:8080/realms/demo/protocol/openid-connect/token \
+    -d "grant_type=client_credentials" -d "client_id=$CLIENT_ID" -d "client_secret=$CLIENT_SECRET" | jq -r ".access_token"
+')
 
-echo "=== SERVICE ACCOUNT TOKEN (Before Exchange) ==="
-echo $TOKEN | cut -d'.' -f2 | tr '_-' '/+' | { read p; echo "${p}=="; } | base64 -d | jq '{aud, azp, iss, sub, preferred_username, scope}'
+# Get a user token for alice (for subject preservation test)
+USER_TOKEN=$(kubectl exec deployment/agent -n authbridge -c agent -- sh -c '
+  CLIENT_ID=$(cat /shared/client-id.txt)
+  CLIENT_SECRET=$(cat /shared/client-secret.txt)
+  curl -s http://keycloak-service.keycloak.svc:8080/realms/demo/protocol/openid-connect/token \
+    -d "grant_type=password" -d "client_id=$CLIENT_ID" -d "client_secret=$CLIENT_SECRET" \
+    -d "username=alice" -d "password=alice123" | jq -r ".access_token"
+')
 
-# Call auth-target (AuthProxy will exchange token)
-echo ""
-echo "Calling auth-target..."
-curl -H "Authorization: Bearer $TOKEN" http://auth-target-service:8081/test
+# Start a test client pod (sends requests from outside the agent pod)
+kubectl run test-client --image=nicolaka/netshoot -n authbridge --restart=Never -- sleep 3600
+kubectl wait --for=condition=ready pod/test-client -n authbridge --timeout=30s
+```
+
+#### 6a. Inbound Rejection - No Token
+
+```bash
+kubectl exec test-client -n authbridge -- curl -s http://$AGENT_POD_IP:8080/test
+# Expected: {"error":"unauthorized","message":"missing Authorization header"}
+```
+
+#### 6b. Inbound Rejection - Invalid Token
+
+```bash
+kubectl exec test-client -n authbridge -- curl -s -H "Authorization: Bearer invalid-token" http://$AGENT_POD_IP:8080/test
+# Expected: {"error":"unauthorized","message":"token validation failed: ..."}
+```
+
+#### 6c. End-to-End with Service Account Token
+
+Inbound validation passes, outbound token exchange converts `aud: <agent SPIFFE ID>` → `aud: auth-target`:
+
+```bash
+kubectl exec test-client -n authbridge -- curl -s -H "Authorization: Bearer $TOKEN" http://$AGENT_POD_IP:8080/test
 # Expected: "authorized"
 ```
 
-#### 6b. User Token Flow (password grant) - Subject Preservation
+#### 6d. End-to-End with User Token (Subject Preservation)
 
-This flow demonstrates how the **user's identity (sub)** is preserved through token exchange. The `setup_keycloak.py` script creates a demo user: `alice` (password: `alice123`)
+Same as 6c, but using alice's user token. The `sub` and `preferred_username` claims are preserved through token exchange:
 
 ```bash
-# Get a user token for alice
-USER_TOKEN=$(curl -sX POST http://keycloak-service.keycloak.svc:8080/realms/demo/protocol/openid-connect/token \
-  -d 'grant_type=password' \
-  -d "client_id=$CLIENT_ID" \
-  -d "client_secret=$CLIENT_SECRET" \
-  -d 'username=alice' \
-  -d 'password=alice123' | jq -r '.access_token')
-
-echo "=== USER TOKEN (Before Exchange) - User: alice ==="
-echo $USER_TOKEN | cut -d'.' -f2 | tr '_-' '/+' | { read p; echo "${p}=="; } | base64 -d | jq '{aud, azp, iss, sub, preferred_username, scope}'
-
-# Call auth-target with alice's token
-echo ""
-echo "Calling auth-target with alice's token..."
-curl -H "Authorization: Bearer $USER_TOKEN" http://auth-target-service:8081/test
-# Expected: "authorized" - alice's identity is preserved!
+kubectl exec test-client -n authbridge -- curl -s -H "Authorization: Bearer $USER_TOKEN" http://$AGENT_POD_IP:8080/test
+# Expected: "authorized"
 ```
 
-**Key Difference:** Compare the `sub` and `preferred_username` claims:
+**Key Difference (6c vs 6d):** Compare the `sub` and `preferred_username` claims:
 - Service account token: `sub` is a service account ID, `preferred_username` is like `service-account-spiffe://...`
 - User token: `sub` is alice's user ID, `preferred_username` is `alice`
 
-#### Quick Test Commands
-
-Run both tests as single commands:
+#### Clean Up
 
 ```bash
-# Service account test
-kubectl exec deployment/agent -n authbridge -c agent -- sh -c '
-CLIENT_ID=$(cat /shared/client-id.txt)
-CLIENT_SECRET=$(cat /shared/client-secret.txt)
-TOKEN=$(curl -s http://keycloak-service.keycloak.svc:8080/realms/demo/protocol/openid-connect/token \
-  -d "grant_type=client_credentials" -d "client_id=$CLIENT_ID" -d "client_secret=$CLIENT_SECRET" | jq -r ".access_token")
-echo "=== SERVICE ACCOUNT ==="
-echo "sub: $(echo $TOKEN | cut -d. -f2 | tr "_-" "/+" | { read p; echo "${p}=="; } | base64 -d | jq -r .sub)"
-echo "preferred_username: $(echo $TOKEN | cut -d. -f2 | tr "_-" "/+" | { read p; echo "${p}=="; } | base64 -d | jq -r .preferred_username)"
-echo "Result: $(curl -s -H "Authorization: Bearer $TOKEN" http://auth-target-service:8081/test)"
-'
+kubectl delete pod test-client -n authbridge --ignore-not-found
+```
 
-# User token test (alice)
-kubectl exec deployment/agent -n authbridge -c agent -- sh -c '
-CLIENT_ID=$(cat /shared/client-id.txt)
-CLIENT_SECRET=$(cat /shared/client-secret.txt)
-USER_TOKEN=$(curl -s http://keycloak-service.keycloak.svc:8080/realms/demo/protocol/openid-connect/token \
-  -d "grant_type=password" -d "client_id=$CLIENT_ID" -d "client_secret=$CLIENT_SECRET" \
-  -d "username=alice" -d "password=alice123" | jq -r ".access_token")
-echo "=== USER: alice ==="
-echo "sub: $(echo $USER_TOKEN | cut -d. -f2 | tr "_-" "/+" | { read p; echo "${p}=="; } | base64 -d | jq -r .sub)"
-echo "preferred_username: $(echo $USER_TOKEN | cut -d. -f2 | tr "_-" "/+" | { read p; echo "${p}=="; } | base64 -d | jq -r .preferred_username)"
-echo "Result: $(curl -s -H "Authorization: Bearer $USER_TOKEN" http://auth-target-service:8081/test)"
-'
+#### Quick Test Commands
+
+Run all tests as a single script:
+
+```bash
+AGENT_POD_IP=$(kubectl get pod -l app=agent -n authbridge -o jsonpath='{.items[0].status.podIP}')
+kubectl run test-client --image=nicolaka/netshoot -n authbridge --restart=Never -- sleep 3600 2>/dev/null
+kubectl wait --for=condition=ready pod/test-client -n authbridge --timeout=30s
+
+TOKEN=$(kubectl exec deployment/agent -n authbridge -c agent -- sh -c '
+  CLIENT_ID=$(cat /shared/client-id.txt); CLIENT_SECRET=$(cat /shared/client-secret.txt)
+  curl -s http://keycloak-service.keycloak.svc:8080/realms/demo/protocol/openid-connect/token \
+    -d "grant_type=client_credentials" -d "client_id=$CLIENT_ID" -d "client_secret=$CLIENT_SECRET" | jq -r ".access_token"
+')
+
+USER_TOKEN=$(kubectl exec deployment/agent -n authbridge -c agent -- sh -c '
+  CLIENT_ID=$(cat /shared/client-id.txt); CLIENT_SECRET=$(cat /shared/client-secret.txt)
+  curl -s http://keycloak-service.keycloak.svc:8080/realms/demo/protocol/openid-connect/token \
+    -d "grant_type=password" -d "client_id=$CLIENT_ID" -d "client_secret=$CLIENT_SECRET" \
+    -d "username=alice" -d "password=alice123" | jq -r ".access_token"
+')
+
+echo "=== 6a. No Token (expect 401) ==="
+kubectl exec test-client -n authbridge -- curl -s http://$AGENT_POD_IP:8080/test
+echo ""
+
+echo "=== 6b. Invalid Token (expect 401) ==="
+kubectl exec test-client -n authbridge -- curl -s -H "Authorization: Bearer invalid-token" http://$AGENT_POD_IP:8080/test
+echo ""
+
+echo "=== 6c. Service Account Token (expect authorized) ==="
+kubectl exec test-client -n authbridge -- curl -s -H "Authorization: Bearer $TOKEN" http://$AGENT_POD_IP:8080/test
+echo ""
+
+echo "=== 6d. User Token - alice (expect authorized) ==="
+kubectl exec test-client -n authbridge -- curl -s -H "Authorization: Bearer $USER_TOKEN" http://$AGENT_POD_IP:8080/test
+echo ""
+
+kubectl delete pod test-client -n authbridge --ignore-not-found
 ```
 
 ### Step 7: Inspect Token Claims (Before and After Exchange)
@@ -533,9 +570,8 @@ kubectl logs deployment/agent -n authbridge -c envoy-proxy 2>&1 | grep -i "token
 You should see:
 
 ```shell
-[Token Exchange] All required headers present, attempting token exchange
-[Token Exchange] Successfully exchanged token
-[Token Exchange] Replacing token in Authorization header
+[Token Exchange] Configuration loaded, attempting token exchange
+[Token Exchange] Successfully exchanged token, replacing Authorization header
 ```
 
 ### Check Auth Target
@@ -559,6 +595,21 @@ Authorized request: GET /test
 **Symptom:** `Connection refused` when connecting to Keycloak
 
 **Fix:** Ensure `OUTBOUND_PORTS_EXCLUDE: "8080"` is set in proxy-init env vars. This excludes Keycloak port from iptables redirect.
+
+### Inbound JWT Validation Fails with "invalid issuer"
+
+**Symptom:** `{"error":"unauthorized","message":"token validation failed: invalid issuer: expected ..., got ..."}`
+
+**Cause:** The Keycloak frontend URL (used as the `iss` claim in tokens) differs from the internal service URL used in `TOKEN_URL`. This is common in Kubernetes where Keycloak is accessed externally via `keycloak.localtest.me` but internally via `keycloak-service.keycloak.svc`.
+
+**Fix:** Set the `ISSUER` field in the `auth-proxy-config` secret to match Keycloak's frontend URL:
+
+```yaml
+stringData:
+  ISSUER: "http://keycloak.localtest.me:8080/realms/demo"
+```
+
+The `ISSUER` env var is required for inbound JWT validation. It must match the Keycloak frontend URL that appears as the `iss` claim in tokens.
 
 ### Token Exchange Fails with "Audience not found"
 

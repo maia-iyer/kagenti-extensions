@@ -8,10 +8,10 @@ The kagenti-webhook watches for deployments with the `kagenti.io/inject: enabled
 
 | Container | Purpose |
 |-----------|---------|
-| `proxy-init` | Init container that sets up iptables to redirect outbound traffic |
+| `proxy-init` | Init container that sets up iptables to redirect inbound and outbound traffic |
 | `spiffe-helper` | Fetches SPIFFE credentials from SPIRE (only with `kagenti.io/spire: enabled`) |
 | `kagenti-client-registration` | Registers the workload with Keycloak (using SPIFFE ID or static client ID) |
-| `envoy-proxy` | Intercepts outbound HTTP requests and performs token exchange |
+| `envoy-proxy` | Intercepts inbound HTTP requests (JWT validation) and outbound requests (token exchange) |
 
 ## Architecture
 
@@ -27,10 +27,15 @@ The kagenti-webhook watches for deployments with the `kagenti.io/inject: enabled
 │         ▼                                                          │
 │  ┌─────────────────────────────────────────────────────────────┐   │
 │  │                    envoy-proxy                              │   │
-│  │  1. Intercepts outbound traffic (via iptables)              │   │
-│  │  2. Extracts Bearer token from Authorization header         │   │
-│  │  3. Exchanges token via Keycloak (aud: auth-target)         │   │
-│  │  4. Replaces token in request                               │   │
+│  │  Inbound (port 15124):                                      │   │
+│  │    1. Intercepts incoming traffic (via iptables PREROUTING) │   │
+│  │    2. Validates JWT (signature + issuer via JWKS)            │   │
+│  │    3. Returns 401 if invalid, forwards if valid              │   │
+│  │  Outbound (port 15123):                                     │   │
+│  │    1. Intercepts outbound traffic (via iptables OUTPUT)     │   │
+│  │    2. Extracts Bearer token from Authorization header       │   │
+│  │    3. Exchanges token via Keycloak (aud: auth-target)       │   │
+│  │    4. Replaces token in request                             │   │
 │  └─────────────────────────────────────────────────────────────┘   │
 └────────────────────────────────────────────────────────────────────┘
                               │
@@ -134,7 +139,7 @@ kubectl apply -f k8s/configmaps-webhook.yaml
 The ConfigMaps include:
 
 - `environments` - Keycloak connection settings for client-registration
-- `authbridge-config` - Token exchange configuration for envoy-proxy
+- `authbridge-config` - Token exchange and inbound validation configuration for envoy-proxy (`TOKEN_URL`, `ISSUER`, `TARGET_AUDIENCE`, `TARGET_SCOPES`)
 - `spiffe-helper-config` - SPIFFE helper configuration (for SPIRE mode)
 - `envoy-config` - Envoy proxy configuration
 
@@ -196,59 +201,117 @@ echo "Service accounts enabled for: $CLIENT_ID"
 '
 ```
 
-## Step 5: Test Token Exchange
+## Step 5: Test the Flow
 
-### Get a Token and Call Auth Target
+These tests verify both **inbound** JWT validation and **outbound** token exchange end-to-end. By sending requests from outside the agent pod, each request exercises the full pipeline:
+
+1. **Inbound**: Envoy intercepts the incoming request, ext-proc validates the JWT (signature + issuer)
+2. **Outbound**: auth-proxy forwards to auth-target, Envoy intercepts the outgoing request, ext-proc exchanges the token
+
+### Setup
 
 ```bash
-kubectl exec -it deployment/agent -n team1 -c agent -- sh
-```
+# Start a test client pod (sends requests from outside the agent pod)
+kubectl run test-client --image=nicolaka/netshoot -n team1 --restart=Never -- sleep 3600
+kubectl wait --for=condition=ready pod/test-client -n team1 --timeout=30s
 
-Inside the container:
-
-```bash
-# Read credentials (populated by client-registration)
-CLIENT_ID=$(cat /shared/client-id.txt)
-CLIENT_SECRET=$(cat /shared/client-secret.txt)
-
+# Get the agent's client credentials (from envoy-proxy container which has the shared volume)
+CLIENT_ID=$(kubectl exec deployment/agent -n team1 -c envoy-proxy -- cat /shared/client-id.txt)
+CLIENT_SECRET=$(kubectl exec deployment/agent -n team1 -c envoy-proxy -- cat /shared/client-secret.txt)
 echo "Client ID: $CLIENT_ID"
-echo "Client Secret: $CLIENT_SECRET"
 
-# Get a token
-TOKEN=$(curl -sX POST http://keycloak-service.keycloak.svc:8080/realms/demo/protocol/openid-connect/token \
-  -d 'grant_type=client_credentials' \
+# Get a service account token (using test-client which has curl)
+TOKEN=$(kubectl exec test-client -n team1 -- curl -s -X POST \
+  "http://keycloak-service.keycloak.svc:8080/realms/demo/protocol/openid-connect/token" \
+  -d "grant_type=client_credentials" \
   -d "client_id=$CLIENT_ID" \
   -d "client_secret=$CLIENT_SECRET" | jq -r '.access_token')
 
-# Verify token BEFORE exchange (aud should be agent's SPIFFE ID)
-echo "=== Token BEFORE exchange ==="
-echo $TOKEN | cut -d'.' -f2 | tr '_-' '/+' | { read p; echo "${p}=="; } | base64 -d | jq '{aud, azp, scope, iss}'
+# Get a user token for alice (for subject preservation test)
+USER_TOKEN=$(kubectl exec test-client -n team1 -- curl -s -X POST \
+  "http://keycloak-service.keycloak.svc:8080/realms/demo/protocol/openid-connect/token" \
+  -d "grant_type=password" \
+  -d "client_id=$CLIENT_ID" \
+  -d "client_secret=$CLIENT_SECRET" \
+  -d "username=alice" \
+  -d "password=alice123" | jq -r '.access_token')
+```
 
-# Call auth-target (token exchange happens transparently via envoy-proxy)
-echo ""
-echo "=== Calling auth-target ==="
-curl -H "Authorization: Bearer $TOKEN" http://auth-target-service:8081/test
+### 5a. Inbound Rejection - No Token
+
+```bash
+kubectl exec test-client -n team1 -- curl -s http://agent-service:8080/test
+# Expected: {"error":"unauthorized","message":"missing Authorization header"}
+```
+
+### 5b. Inbound Rejection - Invalid Token
+
+```bash
+kubectl exec test-client -n team1 -- curl -s -H "Authorization: Bearer invalid-token" http://agent-service:8080/test
+# Expected: {"error":"unauthorized","message":"token validation failed: ..."}
+```
+
+### 5c. End-to-End with Service Account Token
+
+Inbound validation passes, outbound token exchange converts `aud: <agent SPIFFE ID>` → `aud: auth-target`:
+
+```bash
+kubectl exec test-client -n team1 -- curl -s -H "Authorization: Bearer $TOKEN" http://agent-service:8080/test
 # Expected: "authorized"
 ```
 
-### Test with User Token (Subject Preservation)
+### 5d. End-to-End with User Token (Subject Preservation)
+
+Same as 5c, but using alice's user token. The `sub` and `preferred_username` claims are preserved through token exchange:
 
 ```bash
-# Get a user token for alice
-USER_TOKEN=$(curl -sX POST http://keycloak-service.keycloak.svc:8080/realms/demo/protocol/openid-connect/token \
-  -d 'grant_type=password' \
-  -d "client_id=$CLIENT_ID" \
-  -d "client_secret=$CLIENT_SECRET" \
-  -d 'username=alice' \
-  -d 'password=alice123' | jq -r '.access_token')
+kubectl exec test-client -n team1 -- curl -s -H "Authorization: Bearer $USER_TOKEN" http://agent-service:8080/test
+# Expected: "authorized"
+```
 
-# Verify alice's subject in the token (use $USER_TOKEN, not $TOKEN!)
-echo "=== User Token (alice) ==="
-echo $USER_TOKEN | cut -d'.' -f2 | tr '_-' '/+' | { read p; echo "${p}=="; } | base64 -d | jq '{aud, azp, scope, iss, sub, preferred_username}'
+### Clean Up
 
-# Call auth-target with alice's token
-curl -H "Authorization: Bearer $USER_TOKEN" http://auth-target-service:8081/test
-# Expected: "authorized" - alice's subject is preserved after exchange
+```bash
+kubectl delete pod test-client -n team1 --ignore-not-found
+```
+
+### Quick Test Commands
+
+Run all tests as a single script:
+
+```bash
+kubectl run test-client --image=nicolaka/netshoot -n team1 --restart=Never -- sleep 3600 2>/dev/null
+kubectl wait --for=condition=ready pod/test-client -n team1 --timeout=30s
+
+CLIENT_ID=$(kubectl exec deployment/agent -n team1 -c envoy-proxy -- cat /shared/client-id.txt)
+CLIENT_SECRET=$(kubectl exec deployment/agent -n team1 -c envoy-proxy -- cat /shared/client-secret.txt)
+
+TOKEN=$(kubectl exec test-client -n team1 -- curl -s -X POST \
+  "http://keycloak-service.keycloak.svc:8080/realms/demo/protocol/openid-connect/token" \
+  -d "grant_type=client_credentials" -d "client_id=$CLIENT_ID" -d "client_secret=$CLIENT_SECRET" | jq -r '.access_token')
+
+USER_TOKEN=$(kubectl exec test-client -n team1 -- curl -s -X POST \
+  "http://keycloak-service.keycloak.svc:8080/realms/demo/protocol/openid-connect/token" \
+  -d "grant_type=password" -d "client_id=$CLIENT_ID" -d "client_secret=$CLIENT_SECRET" \
+  -d "username=alice" -d "password=alice123" | jq -r '.access_token')
+
+echo "=== 5a. No Token (expect 401) ==="
+kubectl exec test-client -n team1 -- curl -s http://agent-service:8080/test
+echo ""
+
+echo "=== 5b. Invalid Token (expect 401) ==="
+kubectl exec test-client -n team1 -- curl -s -H "Authorization: Bearer invalid-token" http://agent-service:8080/test
+echo ""
+
+echo "=== 5c. Service Account Token (expect authorized) ==="
+kubectl exec test-client -n team1 -- curl -s -H "Authorization: Bearer $TOKEN" http://agent-service:8080/test
+echo ""
+
+echo "=== 5d. User Token - alice (expect authorized) ==="
+kubectl exec test-client -n team1 -- curl -s -H "Authorization: Bearer $USER_TOKEN" http://agent-service:8080/test
+echo ""
+
+kubectl delete pod test-client -n team1 --ignore-not-found
 ```
 
 ## Troubleshooting

@@ -39,6 +39,7 @@ const (
 	// Envoy proxy configuration
 	EnvoyProxyUID  = 1337
 	EnvoyProxyPort = 15123
+ 	EnvoyInboundProxyPort = 15124
 
 	// Client registration container configuration
 	// Keep in sync with AuthBridge/client-registration/Dockerfile
@@ -262,7 +263,7 @@ tail -f /dev/null
 }
 
 // BuildEnvoyProxyContainer creates the envoy-proxy sidecar container
-// This container intercepts outbound traffic and performs token exchange via ext-proc
+// This container intercepts inbound traffic (JWT validation) and outbound traffic (token exchange) via ext-proc
 func BuildEnvoyProxyContainer() corev1.Container {
 	builderLog.Info("building EnvoyProxy Container")
 
@@ -287,6 +288,11 @@ func BuildEnvoyProxyContainer() corev1.Container {
 				Protocol:      corev1.ProtocolTCP,
 			},
 			{
+				Name:          "envoy-inbound",
+				ContainerPort: EnvoyInboundProxyPort,
+				Protocol:      corev1.ProtocolTCP,
+			},
+			{
 				Name:          "envoy-admin",
 				ContainerPort: 9901,
 				Protocol:      corev1.ProtocolTCP,
@@ -307,6 +313,18 @@ func BuildEnvoyProxyContainer() corev1.Container {
 						},
 						Key:      "TOKEN_URL",
 						Optional: ptr.To(true),
+					},
+				},
+			},
+			{
+				Name: "ISSUER",
+				ValueFrom: &corev1.EnvVarSource{
+					ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: "authbridge-config",
+						},
+						Key:      "ISSUER",
+						Optional: ptr.To(false),
 					},
 				},
 			},
@@ -406,6 +424,10 @@ func BuildProxyInitContainer() corev1.Container {
 			{
 				Name:  "PROXY_PORT",
 				Value: fmt.Sprintf("%d", EnvoyProxyPort),
+			},
+			{
+				Name:  "INBOUND_PROXY_PORT",
+				Value: fmt.Sprintf("%d", EnvoyInboundProxyPort),
 			},
 			{
 				Name:  "PROXY_UID",
