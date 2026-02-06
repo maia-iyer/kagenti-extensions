@@ -39,6 +39,11 @@ const (
 	// Envoy proxy configuration
 	EnvoyProxyUID  = 1337
 	EnvoyProxyPort = 15123
+
+	// Client registration container configuration
+	// Keep in sync with AuthBridge/client-registration/Dockerfile
+	ClientRegistrationUID = 1000
+	ClientRegistrationGID = 1000
 )
 
 func BuildSpiffeHelperContainer() corev1.Container {
@@ -249,8 +254,8 @@ tail -f /dev/null
 		Env:          env,
 		VolumeMounts: volumeMounts,
 		SecurityContext: &corev1.SecurityContext{
-			RunAsUser:    ptr.To(int64(1000)),
-			RunAsGroup:   ptr.To(int64(1000)),
+			RunAsUser:    ptr.To(int64(ClientRegistrationUID)),
+			RunAsGroup:   ptr.To(int64(ClientRegistrationGID)),
 			RunAsNonRoot: ptr.To(true),
 		},
 	}
