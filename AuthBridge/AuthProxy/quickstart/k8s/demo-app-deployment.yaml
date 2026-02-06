@@ -26,7 +26,7 @@ spec:
         - name: JWKS_URL
           value: "http://keycloak-service.keycloak.svc.cluster.local:8080/realms/demo/protocol/openid-connect/certs"
         - name: AUDIENCE
-          value: "authproxy"
+          value: "demoapp"
         resources:
           requests:
             memory: "64Mi"

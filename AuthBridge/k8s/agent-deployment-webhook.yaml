@@ -6,6 +6,12 @@
 # - kagenti-client-registration (registers with Keycloak)
 # - envoy-proxy (intercepts traffic and performs token exchange)
 #
+# The agent container runs auth-proxy, which:
+# - Listens on port 8080
+# - Forwards requests to auth-target-service:8081
+# - JWT validation is handled by the inbound ext-proc (injected by webhook)
+# - Token exchange is handled by the outbound ext-proc (injected by webhook)
+#
 # Labels (must be on Pod template, not just Deployment):
 #   kagenti.io/type: agent      - Required: identifies this as an agent workload
 #   kagenti.io/inject: enabled  - Enables AuthBridge sidecar injection
@@ -44,22 +50,41 @@ spec:
     spec:
       serviceAccountName: agent
       containers:
+        # auth-proxy - pass-through proxy (JWT validation handled by inbound ext-proc)
         - name: agent
-          image: nicolaka/netshoot:latest
-          imagePullPolicy: Always
-          command:
-            - sh
-            - -c
-            - |
-              echo "Waiting for client registration..."
-              while [ ! -f /shared/client-id.txt ]; do
-                sleep 2
-              done
-              echo "Ready! Client ID: $(cat /shared/client-id.txt)"
-              tail -f /dev/null
+          image: ghcr.io/kagenti/kagenti-extensions/auth-proxy:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: TARGET_SERVICE_URL
+              value: "http://auth-target-service:8081"
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
           volumeMounts:
             - name: shared-data
               mountPath: /shared
       volumes:
         - name: shared-data
           emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-service
+  namespace: team1
+spec:
+  selector:
+    app: agent
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+  type: ClusterIP

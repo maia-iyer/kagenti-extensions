@@ -21,12 +21,17 @@ docker-build-envoy:
 # Build all Docker images
 build-images: docker-build-proxy docker-build-target docker-build-init docker-build-envoy
 
-# Load Docker images into kind cluster
+# Load Docker images into kind cluster and re-tag for podman compatibility.
+# Podman tags images with a localhost/ prefix, but Kubernetes resolves bare
+# image names to docker.io/library/. Re-tagging inside the node ensures the
+# images are found when pods are scheduled.
+KIND_NODE ?= $(KIND_CLUSTER_NAME)-control-plane
+LOCAL_IMAGES = auth-proxy demo-app proxy-init envoy-with-processor
 load-images:
-	kind load docker-image auth-proxy:latest --name $(KIND_CLUSTER_NAME)
-	kind load docker-image demo-app:latest --name $(KIND_CLUSTER_NAME)
-	kind load docker-image proxy-init:latest --name $(KIND_CLUSTER_NAME)
-	kind load docker-image envoy-with-processor:latest --name $(KIND_CLUSTER_NAME)
+	@for img in $(LOCAL_IMAGES); do \
+		kind load docker-image $$img:latest --name $(KIND_CLUSTER_NAME); \
+		podman exec $(KIND_NODE) ctr --namespace=k8s.io images tag localhost/$$img:latest docker.io/library/$$img:latest 2>/dev/null || true; \
+	done
 
 # Deploy to Kubernetes
 deploy:
