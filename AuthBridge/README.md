@@ -114,11 +114,11 @@ flowchart TB
 
 | Container | Type | Purpose |
 |-----------|------|---------|
-| `proxy-init` | init | Sets up iptables to intercept outgoing traffic (excludes Keycloak port) |
+| `proxy-init` | init | Sets up iptables to intercept inbound and outbound traffic (excludes Keycloak port) |
 | `client-registration` | container | Registers workload with Keycloak using SPIFFE ID, saves credentials to `/shared/` |
 | `spiffe-helper` | container | Provides SPIFFE credentials (SVID) |
-| `auth-proxy` | container | Validates tokens |
-| `envoy-proxy` | container | Intercepts traffic and performs token exchange via Ext Proc |
+| `auth-proxy` | container | Pass-through proxy (JWT validation handled by Ext Proc on inbound path) |
+| `envoy-proxy` | container | Intercepts inbound traffic (JWT validation) and outbound traffic (token exchange) via Ext Proc |
 
 ### Target Service Pod
 
