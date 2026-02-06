@@ -248,6 +248,11 @@ tail -f /dev/null
 		},
 		Env:          env,
 		VolumeMounts: volumeMounts,
+		SecurityContext: &corev1.SecurityContext{
+			RunAsUser:    ptr.To(int64(1000)),
+			RunAsGroup:   ptr.To(int64(1000)),
+			RunAsNonRoot: ptr.To(true),
+		},
 	}
 }
 
