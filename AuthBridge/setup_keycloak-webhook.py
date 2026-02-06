@@ -1,15 +1,18 @@
 """
-setup_keycloak-webhook.py - Keycloak Setup for AuthBridge Webhook
+setup_keycloak-webhook.py - Keycloak Setup for AuthBridge
 
-This script configures Keycloak for deployments using the kagenti-webhook
-to inject AuthBridge sidecars. Unlike the standalone demo, this setup supports
-any namespace where the webhook is enabled.
+This script configures Keycloak for AuthBridge: both webhook-based deployments
+and the standalone demo. Use --namespace and --service-account to match your
+deployment (any namespace for webhook; authbridge/agent for the standalone demo).
 
 Usage:
   python setup_keycloak-webhook.py [--namespace NAMESPACE] [--service-account SA]
 
 Examples:
-  # Default: team1 namespace, agent service account
+  # Standalone demo (authbridge namespace): run this, then deploy k8s/authbridge-deployment.yaml
+  python setup_keycloak-webhook.py --namespace authbridge --service-account agent
+
+  # Webhook deployment (default: team1 namespace, agent service account)
   python setup_keycloak-webhook.py
 
   # Custom namespace and service account
@@ -28,7 +31,7 @@ Clients created:
 - auth-target: Target audience for token exchange (required by Keycloak)
 
 Client Scopes created:
-- agent-spiffe-aud: Adds Agent's SPIFFE ID to token audience (realm DEFAULT)
+- agent-<namespace>-<sa>-aud: Adds workload's SPIFFE ID to token audience (realm DEFAULT)
 - auth-target-aud: Adds "auth-target" to token audience (realm OPTIONAL)
 
 Demo Users created:

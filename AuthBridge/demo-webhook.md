@@ -90,7 +90,7 @@ Then continue with:
 
 ### Step 1: Setup Keycloak
 
-Run the Keycloak setup script to configure the realm, clients, and scopes:
+Run the Keycloak setup script to configure the realm, clients, and scopes. (The same script is used for the [standalone AuthBridge demo](./demo.md)—run with `--namespace authbridge --service-account agent` and then deploy `k8s/authbridge-deployment.yaml`.)
 
 ```bash
 cd AuthBridge
