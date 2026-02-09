@@ -26,9 +26,9 @@ The AuthProxy automatically exchanges tokens based on the destination host:
 
 | Host Pattern | Target Audience | Scope |
 |--------------|-----------------|-------|
-| `target-alpha-service*` | `target-alpha` | `target-alpha-aud` |
-| `target-beta-service*` | `target-beta` | `target-beta-aud` |
-| `target-gamma-service*` | `target-gamma` | `target-gamma-aud` |
+| `target-alpha-service**` | `target-alpha` | `target-alpha-aud` |
+| `target-beta-service**` | `target-beta` | `target-beta-aud` |
+| `target-gamma-service**` | `target-gamma` | `target-gamma-aud` |
 
 ## Prerequisites
 
