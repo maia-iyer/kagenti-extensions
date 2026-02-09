@@ -342,6 +342,8 @@ class KeycloakReconciler:
                     print(f"  [OK] Scope '{scope_name}' already assigned to agent")
                     return
         except Exception:
+            # If we cannot retrieve existing optional scopes, continue and attempt
+            # to assign the scope anyway; the subsequent call will handle conflicts.
             pass
 
         if self.dry_run:
