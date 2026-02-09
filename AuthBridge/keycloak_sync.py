@@ -232,14 +232,8 @@ class KeycloakReconciler:
             uuid = self.kc.get_client_id(client_id)
             print(f"  --> Created agent client '{client_id}'")
 
-            # Display the client secret for user reference
-            if uuid:
-                try:
-                    secret = self.kc.get_client_secrets(uuid).get("value")
-                    if secret:
-                        print(f"  --> Client secret: {secret}")
-                except Exception:
-                    pass
+            # Note: Do not print the client secret to stdout to avoid leaking credentials.
+            # The secret can be retrieved securely via the Keycloak admin console or API.
 
             return uuid
         except Exception as e:
