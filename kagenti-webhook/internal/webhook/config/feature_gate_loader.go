@@ -38,7 +38,15 @@ func (l *FeatureGateLoader) Load() error {
 	if err != nil {
 		if os.IsNotExist(err) {
 			log.Info("Feature gates file not found, using defaults (all enabled)")
+			l.mu.Lock()
+			l.current = gates
+			callbacks := make([]func(*FeatureGates), len(l.onChange))
+			copy(callbacks, l.onChange)
+			l.mu.Unlock()
 			logFeatureGates(gates, "compiled-defaults")
+			for _, cb := range callbacks {
+				cb(gates.DeepCopy())
+			}
 			return nil
 		}
 		return err
@@ -54,8 +62,15 @@ func (l *FeatureGateLoader) Load() error {
 
 	logFeatureGates(gates, "configmap")
 
-	for _, cb := range l.onChange {
-		cb(gates)
+	// Snapshot callbacks under lock, then invoke outside lock
+	// so callbacks can safely call Get() without deadlock.
+	l.mu.RLock()
+	callbacks := make([]func(*FeatureGates), len(l.onChange))
+	copy(callbacks, l.onChange)
+	l.mu.RUnlock()
+
+	for _, cb := range callbacks {
+		cb(gates.DeepCopy())
 	}
 
 	return nil
@@ -95,6 +110,11 @@ func (l *FeatureGateLoader) Watch(ctx context.Context) error {
 		defer watcher.Close()
 
 		var debounceTimer *time.Timer
+		defer func() {
+			if debounceTimer != nil {
+				debounceTimer.Stop()
+			}
+		}()
 
 		for {
 			select {
@@ -135,7 +155,10 @@ func (l *FeatureGateLoader) Watch(ctx context.Context) error {
 }
 
 // OnChange registers a callback for feature gate changes.
+// Safe to call concurrently with Load/Watch.
 func (l *FeatureGateLoader) OnChange(cb func(*FeatureGates)) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.onChange = append(l.onChange, cb)
 }
 

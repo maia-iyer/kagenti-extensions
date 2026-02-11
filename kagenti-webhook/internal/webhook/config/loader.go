@@ -43,7 +43,15 @@ func (l *ConfigLoader) Load() error {
 	if err != nil {
 		if os.IsNotExist(err) {
 			log.Info("Config file not found, using compiled defaults only")
+			l.mu.Lock()
+			l.currentConfig = config
+			callbacks := make([]func(*PlatformConfig), len(l.onChange))
+			copy(callbacks, l.onChange)
+			l.mu.Unlock()
 			logConfig(config, "compiled-defaults")
+			for _, cb := range callbacks {
+				cb(config.DeepCopy())
+			}
 			return nil
 		}
 		return err
@@ -68,9 +76,15 @@ func (l *ConfigLoader) Load() error {
 	log.Info("Platform config loaded successfully from file")
 	logConfig(config, "configmap")
 
-	// Notify listeners
-	for _, cb := range l.onChange {
-		cb(config)
+	// Snapshot callbacks under lock, then invoke outside lock
+	// so callbacks can safely call Get() without deadlock.
+	l.mu.RLock()
+	callbacks := make([]func(*PlatformConfig), len(l.onChange))
+	copy(callbacks, l.onChange)
+	l.mu.RUnlock()
+
+	for _, cb := range callbacks {
+		cb(config.DeepCopy())
 	}
 
 	return nil
@@ -115,6 +129,11 @@ func (l *ConfigLoader) Watch(ctx context.Context) error {
 
 		// Debounce rapid changes (ConfigMap updates can trigger multiple events)
 		var debounceTimer *time.Timer
+		defer func() {
+			if debounceTimer != nil {
+				debounceTimer.Stop()
+			}
+		}()
 
 		for {
 			select {
@@ -156,8 +175,11 @@ func (l *ConfigLoader) Watch(ctx context.Context) error {
 	return nil
 }
 
-// OnChange registers a callback for config changes
+// OnChange registers a callback for config changes.
+// Safe to call concurrently with Load/Watch.
 func (l *ConfigLoader) OnChange(cb func(*PlatformConfig)) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.onChange = append(l.onChange, cb)
 }
 
