@@ -148,7 +148,7 @@ The ConfigMaps include:
 - `authbridge-config` - Token exchange and inbound validation configuration for envoy-proxy:
   - `TOKEN_URL` - Keycloak token endpoint for token exchange
   - `ISSUER` - Expected JWT issuer for inbound validation (required)
-  - `EXPECTED_AUDIENCE` - Expected audience for inbound validation (optional, defaults to team1/agent SPIFFE ID)
+  - `EXPECTED_AUDIENCE` - Expected audience for inbound validation (optional, if not set audience validation is skipped)
   - `TARGET_AUDIENCE` - Target audience for outbound token exchange
   - `TARGET_SCOPES` - Scopes for exchanged tokens
 - `spiffe-helper-config` - SPIFFE helper configuration (for SPIRE mode)
