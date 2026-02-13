@@ -22,6 +22,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/kagenti/kagenti-extensions/AuthBridge/AuthProxy/go-processor/internal/resolver"
 )
 
 // Configuration for token exchange
@@ -45,6 +47,10 @@ type tokenExchangeResponse struct {
 	TokenType   string `json:"token_type"`
 	ExpiresIn   int    `json:"expires_in"`
 }
+
+const defaultRoutesConfigPath = "/etc/authproxy/routes.yaml"
+
+var globalResolver resolver.TargetResolver
 
 // readFileContent reads the content of a file, trimming whitespace
 func readFileContent(path string) (string, error) {
@@ -119,21 +125,21 @@ func waitForCredentials(maxWait time.Duration) bool {
 
 	log.Printf("[Config] Waiting for credential files (max %v)...", maxWait)
 	deadline := time.Now().Add(maxWait)
-	
+
 	for time.Now().Before(deadline) {
 		// Check if both files exist and have content
 		clientID, err1 := readFileContent(clientIDFile)
 		clientSecret, err2 := readFileContent(clientSecretFile)
-		
+
 		if err1 == nil && err2 == nil && clientID != "" && clientSecret != "" {
 			log.Printf("[Config] Credential files are ready")
 			return true
 		}
-		
+
 		log.Printf("[Config] Credentials not ready yet, waiting...")
 		time.Sleep(2 * time.Second)
 	}
-	
+
 	log.Printf("[Config] Timeout waiting for credentials, will use environment variables if available")
 	return false
 }
@@ -229,6 +235,14 @@ func denyRequest(message string) *v3.ProcessingResponse {
 			},
 		},
 	}
+}
+
+// getHostFromHeaders extracts host from :authority (HTTP/2) or Host header
+func getHostFromHeaders(headers []*core.HeaderValue) string {
+	if host := getHeaderValue(headers, ":authority"); host != "" {
+		return host
+	}
+	return getHeaderValue(headers, "host")
 }
 
 // exchangeToken performs OAuth 2.0 Token Exchange (RFC 8693).
@@ -345,7 +359,8 @@ func (p *processor) handleInbound(headers *core.HeaderMap) *v3.ProcessingRespons
 }
 
 // handleOutbound processes outbound traffic by performing token exchange.
-func (p *processor) handleOutbound(headers *core.HeaderMap) *v3.ProcessingResponse {
+// It uses the resolver to get per-host configuration for audience/scopes/tokenURL.
+func (p *processor) handleOutbound(ctx context.Context, headers *core.HeaderMap) *v3.ProcessingResponse {
 	log.Println("=== Outbound Request Headers ===")
 	if headers != nil {
 		for _, header := range headers.Headers {
@@ -356,7 +371,42 @@ func (p *processor) handleOutbound(headers *core.HeaderMap) *v3.ProcessingRespon
 		}
 	}
 
+	// Extract host and resolve target configuration
+	requestHost := getHostFromHeaders(headers.Headers)
+	targetConfig, err := globalResolver.Resolve(ctx, requestHost)
+	if err != nil {
+		log.Printf("[Resolver] Error resolving host %q: %v", requestHost, err)
+	}
+
+	// Handle passthrough routes - skip token exchange
+	if targetConfig != nil && targetConfig.Passthrough {
+		log.Printf("[Resolver] Passthrough enabled for host %q, skipping token exchange", requestHost)
+		return &v3.ProcessingResponse{
+			Response: &v3.ProcessingResponse_RequestHeaders{
+				RequestHeaders: &v3.HeadersResponse{},
+			},
+		}
+	}
+
+	// Get global configuration (from files or env vars)
 	clientID, clientSecret, tokenURL, targetAudience, targetScopes := getConfig()
+
+	// Apply target-specific overrides if available
+	if targetConfig != nil {
+		log.Printf("[Resolver] Applying target config for host %q", requestHost)
+		if targetConfig.Audience != "" {
+			targetAudience = targetConfig.Audience
+			log.Printf("[Resolver] Using target audience: %s", targetAudience)
+		}
+		if targetConfig.Scopes != "" {
+			targetScopes = targetConfig.Scopes
+			log.Printf("[Resolver] Using target scopes: %s", targetScopes)
+		}
+		if targetConfig.TokenEndpoint != "" {
+			tokenURL = targetConfig.TokenEndpoint
+			log.Printf("[Resolver] Using target token_url: %s", tokenURL)
+		}
+	}
 
 	if clientID != "" && clientSecret != "" && tokenURL != "" && targetAudience != "" && targetScopes != "" {
 		log.Println("[Token Exchange] Configuration loaded, attempting token exchange")
@@ -438,7 +488,7 @@ func (p *processor) Process(stream v3.ExternalProcessor_ProcessServer) error {
 			if direction == "inbound" {
 				resp = p.handleInbound(headers)
 			} else {
-				resp = p.handleOutbound(headers)
+				resp = p.handleOutbound(ctx, headers)
 			}
 
 		case *v3.ProcessingRequest_ResponseHeaders:
@@ -495,6 +545,17 @@ func main() {
 		if inboundIssuer == "" {
 			log.Println("[Inbound] ISSUER not configured, inbound JWT validation disabled")
 		}
+	}
+
+	// Initialize the target resolver
+	configPath := os.Getenv("ROUTES_CONFIG_PATH")
+	if configPath == "" {
+		configPath = defaultRoutesConfigPath
+	}
+	var err error
+	globalResolver, err = resolver.NewStaticResolver(configPath)
+	if err != nil {
+		log.Fatalf("failed to load routes config: %v", err)
 	}
 
 	// Start gRPC server
