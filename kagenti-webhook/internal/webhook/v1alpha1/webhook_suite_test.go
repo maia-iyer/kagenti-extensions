@@ -29,6 +29,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/kagenti/kagenti-extensions/kagenti-webhook/internal/webhook/config"
 	"github.com/kagenti/kagenti-extensions/kagenti-webhook/internal/webhook/injector"
 	agentsv1alpha1 "github.com/kagenti/operator/api/v1alpha1"
 	toolhivestacklokdevv1alpha1 "github.com/stacklok/toolhive/cmd/thv-operator/api/v1alpha1"
@@ -119,7 +120,12 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 
 	// Create pod mutator for tests
-	podMutator := injector.NewPodMutator(k8sClient, true)
+	podMutator := injector.NewPodMutator(
+		k8sClient,
+		true,
+		func() *config.PlatformConfig { return config.CompiledDefaults() },
+		func() *config.FeatureGates { return config.DefaultFeatureGates() },
+	)
 
 	err = SetupMCPServerWebhookWithManager(mgr, podMutator)
 	Expect(err).NotTo(HaveOccurred())

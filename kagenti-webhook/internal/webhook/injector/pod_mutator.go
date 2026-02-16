@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/kagenti/kagenti-extensions/kagenti-webhook/internal/webhook/config"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -32,8 +33,7 @@ const (
 	SpiffeHelperContainerName       = "spiffe-helper"
 	ClientRegistrationContainerName = "kagenti-client-registration"
 
-	// Default configuration
-	DefaultNamespaceLabel      = "kagenti-enabled"
+	// Default configuration (deprecated paths use these directly)
 	DefaultNamespaceAnnotation = "kagenti.dev/inject"
 	DefaultCRAnnotation        = "kagenti.dev/inject"
 	// Label selector for authbridge injection
@@ -45,7 +45,6 @@ const (
 	SpireEnableLabel   = "kagenti.io/spire"
 	SpireEnabledValue  = "enabled"
 	SpireDisabledValue = "disabled"
-
 	// Istio exclusion annotations
 	IstioSidecarInjectAnnotation = "sidecar.istio.io/inject"
 	AmbientRedirectionAnnotation = "ambient.istio.io/redirection"
@@ -63,14 +62,27 @@ type PodMutator struct {
 	EnableClientRegistration bool
 	NamespaceLabel           string
 	NamespaceAnnotation      string
+	Builder                  *ContainerBuilder
+	// Getter functions for hot-reloadable config (used by precedence evaluator)
+	GetPlatformConfig func() *config.PlatformConfig
+	GetFeatureGates   func() *config.FeatureGates
 }
 
-func NewPodMutator(client client.Client, enableClientRegistration bool) *PodMutator {
+func NewPodMutator(
+	client client.Client,
+	enableClientRegistration bool,
+	getPlatformConfig func() *config.PlatformConfig,
+	getFeatureGates func() *config.FeatureGates,
+) *PodMutator {
+	cfg := getPlatformConfig()
 	return &PodMutator{
 		Client:                   client,
 		EnableClientRegistration: enableClientRegistration,
-		NamespaceLabel:           DefaultNamespaceLabel,
+		NamespaceLabel:           LabelNamespaceInject,
 		NamespaceAnnotation:      DefaultNamespaceAnnotation,
+		Builder:                  NewContainerBuilder(cfg),
+		GetPlatformConfig:        getPlatformConfig,
+		GetFeatureGates:          getFeatureGates,
 	}
 }
 
@@ -118,40 +130,102 @@ func IsSpireEnabled(labels map[string]string) bool {
 	return value == SpireEnabledValue
 }
 
-// It checks if injection should occur and performs all necessary mutations
+// InjectAuthBridge evaluates the multi-layer precedence chain and conditionally injects sidecars.
 func (m *PodMutator) InjectAuthBridge(ctx context.Context, podSpec *corev1.PodSpec, namespace, crName string, labels map[string]string) (bool, error) {
 	mutatorLog.Info("InjectAuthBridge called", "namespace", namespace, "crName", crName, "labels", labels)
 
-	shouldMutate, err := m.NeedsMutation(ctx, namespace, labels)
-	if err != nil {
-		mutatorLog.Error(err, "Failed to determine if mutation should occur", "namespace", namespace, "crName", crName)
-		return false, fmt.Errorf("failed to determine if mutation should occur: %w", err)
+	// Pre-filter: only agent/tool workloads are eligible
+	kagentiType, hasKagentiLabel := labels[KagentiTypeLabel]
+	if !hasKagentiLabel || (kagentiType != KagentiTypeAgent && kagentiType != KagentiTypeTool) {
+		mutatorLog.Info("Skipping mutation: workload is not an agent or a tool",
+			"hasLabel", hasKagentiLabel,
+			"labelValue", kagentiType)
+		return false, nil
 	}
 
-	if !shouldMutate {
-		mutatorLog.Info("Skipping mutation (injection not enabled)", "namespace", namespace, "crName", crName)
-		return false, nil // Skip mutation
+	// Fetch namespace labels for the precedence evaluator
+	ns := &corev1.Namespace{}
+	if err := m.Client.Get(ctx, client.ObjectKey{Name: namespace}, ns); err != nil {
+		mutatorLog.Error(err, "Failed to fetch namespace", "namespace", namespace)
+		return false, fmt.Errorf("failed to fetch namespace: %w", err)
 	}
 
-	// Check if SPIRE is enabled
+	// Get fresh config snapshots for this request (hot-reloadable)
+	currentConfig := m.GetPlatformConfig()
+	currentGates := m.GetFeatureGates()
+
+	// Evaluate the precedence chain
+	evaluator := NewPrecedenceEvaluator(currentGates, currentConfig)
+	decision := evaluator.Evaluate(ns.Labels, labels, nil)
+
+	// Log each sidecar decision
+	for _, d := range []struct {
+		name string
+		sd   SidecarDecision
+	}{
+		{"envoy-proxy", decision.EnvoyProxy},
+		{"proxy-init", decision.ProxyInit},
+		{"spiffe-helper", decision.SpiffeHelper},
+		{"client-registration", decision.ClientRegistration},
+	} {
+		mutatorLog.Info("injection decision",
+			"sidecar", d.name,
+			"inject", d.sd.Inject,
+			"reason", d.sd.Reason,
+			"layer", d.sd.Layer,
+		)
+	}
+
+	if !decision.AnyInjected() {
+		mutatorLog.Info("Skipping mutation (no sidecars to inject)", "namespace", namespace, "crName", crName)
+		return false, nil
+	}
+
 	spireEnabled := IsSpireEnabled(labels)
-	mutatorLog.Info("Mutation enabled - injecting sidecars, init containers, and volumes",
-		"namespace", namespace, "crName", crName, "spireEnabled", spireEnabled)
 
-	// Inject init containers (proxy-init for iptables setup)
-	if err := m.InjectInitContainers(podSpec); err != nil {
-		mutatorLog.Error(err, "Failed to inject init containers", "namespace", namespace, "crName", crName)
-		return false, fmt.Errorf("failed to inject init containers: %w", err)
+	// Initialize slices
+	if podSpec.Containers == nil {
+		podSpec.Containers = []corev1.Container{}
+	}
+	if podSpec.InitContainers == nil {
+		podSpec.InitContainers = []corev1.Container{}
+	}
+	if podSpec.Volumes == nil {
+		podSpec.Volumes = []corev1.Volume{}
 	}
 
-	if err := m.InjectSidecarsWithSpireOption(podSpec, namespace, crName, spireEnabled); err != nil {
-		mutatorLog.Error(err, "Failed to inject sidecars", "namespace", namespace, "crName", crName)
-		return false, fmt.Errorf("failed to inject sidecars: %w", err)
+	// Build containers using fresh config (picks up hot-reloaded images/resources)
+	builder := NewContainerBuilder(currentConfig)
+
+	// Conditionally inject sidecars based on precedence decisions
+	if decision.EnvoyProxy.Inject && !containerExists(podSpec.Containers, EnvoyProxyContainerName) {
+		podSpec.Containers = append(podSpec.Containers, builder.BuildEnvoyProxyContainer())
 	}
 
-	if err := m.InjectVolumesWithSpireOption(podSpec, spireEnabled); err != nil {
-		mutatorLog.Error(err, "Failed to inject volumes", "namespace", namespace, "crName", crName)
-		return false, fmt.Errorf("failed to inject volumes: %w", err)
+	if decision.ProxyInit.Inject && !containerExists(podSpec.InitContainers, ProxyInitContainerName) {
+		podSpec.InitContainers = append(podSpec.InitContainers, builder.BuildProxyInitContainer())
+	}
+
+	if decision.SpiffeHelper.Inject && !containerExists(podSpec.Containers, SpiffeHelperContainerName) {
+		podSpec.Containers = append(podSpec.Containers, builder.BuildSpiffeHelperContainer())
+	}
+
+	if decision.ClientRegistration.Inject && !containerExists(podSpec.Containers, ClientRegistrationContainerName) {
+		podSpec.Containers = append(podSpec.Containers, builder.BuildClientRegistrationContainerWithSpireOption(crName, namespace, spireEnabled))
+	}
+
+	// Inject volumes — use SPIRE volumes when spireEnabled because both
+	// spiffe-helper AND client-registration mount svid-output in that mode.
+	var requiredVolumes []corev1.Volume
+	if spireEnabled {
+		requiredVolumes = BuildRequiredVolumes()
+	} else {
+		requiredVolumes = BuildRequiredVolumesNoSpire()
+	}
+	for _, vol := range requiredVolumes {
+		if !volumeExists(podSpec.Volumes, vol.Name) {
+			podSpec.Volumes = append(podSpec.Volumes, vol)
+		}
 	}
 
 	mutatorLog.Info("Successfully mutated pod spec", "namespace", namespace, "crName", crName,
@@ -244,7 +318,7 @@ func (m *PodMutator) InjectSidecarsWithSpireOption(podSpec *corev1.PodSpec, name
 	if spireEnabled {
 		if !containerExists(podSpec.Containers, SpiffeHelperContainerName) {
 			mutatorLog.Info("Injecting spiffe-helper (SPIRE enabled)")
-			podSpec.Containers = append(podSpec.Containers, BuildSpiffeHelperContainer())
+			podSpec.Containers = append(podSpec.Containers, m.Builder.BuildSpiffeHelperContainer())
 		}
 	} else {
 		mutatorLog.Info("Skipping spiffe-helper injection (SPIRE disabled)")
@@ -252,12 +326,12 @@ func (m *PodMutator) InjectSidecarsWithSpireOption(podSpec *corev1.PodSpec, name
 
 	// Check and inject client-registration sidecar (with SPIRE option)
 	if !containerExists(podSpec.Containers, ClientRegistrationContainerName) {
-		podSpec.Containers = append(podSpec.Containers, BuildClientRegistrationContainerWithSpireOption(crName, namespace, spireEnabled))
+		podSpec.Containers = append(podSpec.Containers, m.Builder.BuildClientRegistrationContainerWithSpireOption(crName, namespace, spireEnabled))
 	}
 
 	// Check and inject envoy-proxy sidecar
 	if !containerExists(podSpec.Containers, EnvoyProxyContainerName) {
-		podSpec.Containers = append(podSpec.Containers, BuildEnvoyProxyContainer())
+		podSpec.Containers = append(podSpec.Containers, m.Builder.BuildEnvoyProxyContainer())
 	}
 
 	return nil
@@ -273,7 +347,7 @@ func (m *PodMutator) InjectInitContainers(podSpec *corev1.PodSpec) error {
 	// Check and inject proxy-init init container
 	if !containerExists(podSpec.InitContainers, ProxyInitContainerName) {
 		mutatorLog.Info("Injecting proxy-init init container")
-		podSpec.InitContainers = append(podSpec.InitContainers, BuildProxyInitContainer())
+		podSpec.InitContainers = append(podSpec.InitContainers, m.Builder.BuildProxyInitContainer())
 	}
 
 	return nil
