@@ -168,7 +168,9 @@ func (w *AuthBridgeWebhook) Handle(ctx context.Context, req admission.Request) a
 
 func (w *AuthBridgeWebhook) isAlreadyInjected(podSpec *corev1.PodSpec) bool {
 	for _, container := range podSpec.Containers {
-		if container.Name == injector.SpiffeHelperContainerName || container.Name == injector.ClientRegistrationContainerName {
+		if container.Name == injector.SpiffeHelperContainerName ||
+			container.Name == injector.ClientRegistrationContainerName ||
+			container.Name == injector.EnvoyProxyContainerName {
 			return true
 		}
 	}

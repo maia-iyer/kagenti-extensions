@@ -26,6 +26,7 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	"github.com/kagenti/kagenti-extensions/kagenti-webhook/internal/webhook/config"
 	"github.com/kagenti/kagenti-extensions/kagenti-webhook/internal/webhook/injector"
 	webhooktoolhivestacklokdevv1alpha1 "github.com/kagenti/kagenti-extensions/kagenti-webhook/internal/webhook/v1alpha1"
 	agentsv1alpha1 "github.com/kagenti/operator/api/v1alpha1"
@@ -68,6 +69,9 @@ func main() {
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
 	var enableClientRegistration bool
+	var configPath string
+	var featureGatesPath string
+
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -87,6 +91,8 @@ func main() {
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.BoolVar(&enableClientRegistration, "enable-client-registration", true,
 		"If set, Kagenti webhook will register tool clients in Keycloak")
+	flag.StringVar(&configPath, "config-path", "/etc/kagenti/config.yaml", "Path to platform config file")
+	flag.StringVar(&featureGatesPath, "feature-gates-path", "/etc/kagenti/feature-gates/feature-gates.yaml", "Path to feature gates config file")
 
 	opts := zap.Options{
 		Development: true,
@@ -95,6 +101,56 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	ctx := ctrl.SetupSignalHandler()
+
+	// ========================================
+	// 1. Load platform configuration
+	// ========================================
+	configLoader := config.NewConfigLoader(configPath)
+
+	// Load initial config
+	if err := configLoader.Load(); err != nil {
+		setupLog.Error(err, "Failed to load platform config")
+		os.Exit(1)
+	}
+
+	// Register OnChange before Watch to avoid missing updates during startup
+	configLoader.OnChange(func(cfg *config.PlatformConfig) {
+		setupLog.Info("Platform config updated",
+			"envoyImage", cfg.Images.EnvoyProxy,
+			"proxyPort", cfg.Proxy.Port)
+	})
+
+	// Start watching for config changes
+	if err := configLoader.Watch(ctx); err != nil {
+		setupLog.Error(err, "Failed to start config watcher")
+		// Non-fatal - continue without hot reload
+	}
+
+	// ========================================
+	// 2. Load feature gates
+	// ========================================
+	featureGateLoader := config.NewFeatureGateLoader(featureGatesPath)
+
+	if err := featureGateLoader.Load(); err != nil {
+		setupLog.Error(err, "Failed to load feature gates")
+		os.Exit(1)
+	}
+
+	// Register OnChange before Watch to avoid missing updates during startup
+	featureGateLoader.OnChange(func(fg *config.FeatureGates) {
+		setupLog.Info("Feature gates updated",
+			"globalEnabled", fg.GlobalEnabled,
+			"envoyProxy", fg.EnvoyProxy,
+			"spiffeHelper", fg.SpiffeHelper,
+			"clientRegistration", fg.ClientRegistration)
+	})
+
+	if err := featureGateLoader.Watch(ctx); err != nil {
+		setupLog.Error(err, "Failed to start feature gates watcher")
+		// Non-fatal - continue without hot reload
+	}
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -218,8 +274,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create shared pod mutator for both webhooks
-	podMutator := injector.NewPodMutator(k8sClient, enableClientRegistration)
+	// Create shared pod mutator for all webhooks
+	podMutator := injector.NewPodMutator(
+		k8sClient,
+		enableClientRegistration,
+		configLoader.Get,
+		featureGateLoader.Get,
+	)
 
 	// nolint:goconst
 	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
@@ -269,7 +330,7 @@ func main() {
 	}
 
 	setupLog.Info("starting manager")
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	if err := mgr.Start(ctx); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
