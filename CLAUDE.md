@@ -313,14 +313,10 @@ AUTHBRIDGE_DEMO=true ./scripts/webhook-rollout.sh
 
 2. **Two Go modules:** The repo has two independent Go modules (`kagenti-webhook/go.mod` and `AuthBridge/AuthProxy/go.mod`) with different Go versions (1.24 vs 1.23). They do not share code.
 
-3. **AuthProxy module name:** `AuthBridge/AuthProxy/go.mod` uses module name `github.com/huang195/auth-proxy` (likely from the original author). Consider renaming to match the repo.
+3. **Helm chart tag placeholder:** `charts/kagenti-webhook/values.yaml` uses `tag: "__PLACEHOLDER__"`. The goreleaser workflow replaces this at release time. For local dev, override with `--set image.tag=<tag>`.
 
-4. **Helm chart tag placeholder:** `charts/kagenti-webhook/values.yaml` uses `tag: "__PLACEHOLDER__"`. The goreleaser workflow replaces this at release time. For local dev, override with `--set image.tag=<tag>`.
+4. **Avoid committing venvs:** Virtual environment directories (e.g. `AuthBridge/AuthProxy/quickstart/venv/`) should be gitignored (the repo's `.gitignore` has a `venv` pattern). Do not create and commit new virtual environments under version control.
 
-5. **Avoid committing venvs:** Virtual environment directories (e.g. `AuthBridge/AuthProxy/quickstart/venv/`) should be gitignored (the repo's `.gitignore` has a `venv` pattern). Do not create and commit new virtual environments under version control.
+5. **CI Go version alignment:** Ensure the Go version in `ci.yaml` matches the highest Go version required across all modules (currently Go 1.24, matching `kagenti-webhook/go.mod`).
 
-6. **CI Go version alignment:** Ensure the Go version in `ci.yaml` matches the highest Go version required across all modules (currently Go 1.24, matching `kagenti-webhook/go.mod`).
-
-7. **proxy-init requires privileged mode:** The init container runs as root with `privileged: true` for iptables. Pod Security Standards at `restricted` level will reject it without an exemption.
-
-8. **Envoy config not embedded:** The envoy-proxy sidecar mounts `envoy-config` ConfigMap at `/etc/envoy`. This ConfigMap must exist in the target namespace before workloads are created.
+6. **Envoy config not embedded:** The envoy-proxy sidecar mounts `envoy-config` ConfigMap at `/etc/envoy`. This ConfigMap must exist in the target namespace before workloads are created.

@@ -28,7 +28,7 @@ AuthBridge/
 │   ├── Dockerfile.envoy              #   envoy-with-processor (Envoy 1.28 + go-processor)
 │   ├── Dockerfile.init               #   proxy-init (Alpine + iptables)
 │   ├── Makefile                      #   Build/deploy targets for quickstart
-│   ├── go.mod                        #   Go module (github.com/huang195/auth-proxy)
+│   ├── go.mod                        #   Go module (github.com/kagenti/kagenti-extensions/AuthBridge/AuthProxy)
 │   ├── k8s/                          #   Standalone K8s manifests for AuthProxy
 │   │   ├── auth-proxy-deployment.yaml
 │   │   └── go-processor-deployment.yaml
@@ -251,7 +251,7 @@ kubectl apply -f k8s/authbridge-deployment-no-spiffe.yaml # Without SPIFFE
 ## Code Conventions
 
 ### Go (AuthProxy, go-processor, demo-app)
-- Go 1.23 (module: `github.com/huang195/auth-proxy` -- legacy name, not yet renamed)
+- Go 1.23 (module: `github.com/kagenti/kagenti-extensions/AuthBridge/AuthProxy`)
 - Logging with `log.Printf` (stdlib), prefixed by `[Config]`, `[Token Exchange]`, `[Inbound]`, `[JWT Debug]`
 - Thread-safe config via `sync.RWMutex` in the `Config` struct
 - gRPC ext-proc using `envoyproxy/go-control-plane` types
@@ -305,18 +305,16 @@ kubectl apply -f k8s/authbridge-deployment-no-spiffe.yaml # Without SPIFFE
 
 ## Gotchas and Known Issues
 
-1. **Go module name mismatch**: `AuthProxy/go.mod` uses `github.com/huang195/auth-proxy` instead of matching the repo path. This is cosmetic but confusing.
+1. **Credential file race condition**: The ext-proc waits up to 60s for `/shared/client-id.txt` and `/shared/client-secret.txt`. If client-registration takes longer (e.g., Keycloak slow to start), the ext-proc will fall back to env vars which may be empty.
 
-2. **Credential file race condition**: The ext-proc waits up to 60s for `/shared/client-id.txt` and `/shared/client-secret.txt`. If client-registration takes longer (e.g., Keycloak slow to start), the ext-proc will fall back to env vars which may be empty.
+2. **ISSUER vs TOKEN_URL**: `ISSUER` must be the Keycloak **frontend URL** (what appears in the `iss` claim of tokens), while `TOKEN_URL` is the **internal service URL**. These are often different in Kubernetes (e.g., `http://keycloak.localtest.me:8080` vs `http://keycloak-service.keycloak.svc:8080`).
 
-3. **ISSUER vs TOKEN_URL**: `ISSUER` must be the Keycloak **frontend URL** (what appears in the `iss` claim of tokens), while `TOKEN_URL` is the **internal service URL**. These are often different in Kubernetes (e.g., `http://keycloak.localtest.me:8080` vs `http://keycloak-service.keycloak.svc:8080`).
+3. **Keycloak port exclusion**: When using iptables interception, Keycloak's port (8080) must be excluded from redirect via `OUTBOUND_PORTS_EXCLUDE=8080`. Otherwise, token exchange requests from the ext-proc get redirected back to Envoy, creating a loop.
 
-4. **Keycloak port exclusion**: When using iptables interception, Keycloak's port (8080) must be excluded from redirect via `OUTBOUND_PORTS_EXCLUDE=8080`. Otherwise, token exchange requests from the ext-proc get redirected back to Envoy, creating a loop.
+4. **TLS passthrough is one-way**: Outbound HTTPS traffic passes through Envoy without token exchange. There is no mechanism to exchange tokens for HTTPS destinations. Only HTTP outbound traffic gets token exchange.
 
-5. **TLS passthrough is one-way**: Outbound HTTPS traffic passes through Envoy without token exchange. There is no mechanism to exchange tokens for HTTPS destinations. Only HTTP outbound traffic gets token exchange.
+5. **Virtualenv directory**: For local development you may create `AuthProxy/quickstart/venv/`, but it should be gitignored and is not committed to the repo.
 
-6. **Virtualenv directory**: For local development you may create `AuthProxy/quickstart/venv/`, but it should be gitignored and is not committed to the repo.
+6. **Demo SPIFFE ID is hardcoded**: `setup_keycloak.py` hardcodes `AGENT_SPIFFE_ID = "spiffe://localtest.me/ns/authbridge/sa/agent"`. Change this if using a different namespace/SA.
 
-7. **Demo SPIFFE ID is hardcoded**: `setup_keycloak.py` hardcodes `AGENT_SPIFFE_ID = "spiffe://localtest.me/ns/authbridge/sa/agent"`. Change this if using a different namespace/SA.
-
-8. **Admin credentials in ConfigMap**: `configmaps-webhook.yaml` stores Keycloak admin credentials in a ConfigMap (not a Secret). This is for demo only -- production should use Kubernetes Secrets.
+7. **Admin credentials in ConfigMap**: `configmaps-webhook.yaml` stores Keycloak admin credentials in a ConfigMap (not a Secret). This is for demo only -- production should use Kubernetes Secrets.

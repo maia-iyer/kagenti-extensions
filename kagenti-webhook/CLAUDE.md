@@ -37,7 +37,7 @@ All three webhooks share a single `PodMutator` instance created in `cmd/main.go`
 ### Injected Containers
 
 **AuthBridge always injects:**
-- `proxy-init` (init container) -- iptables redirect via privileged init.
+- `proxy-init` (init container) -- iptables redirect setup.
 - `envoy-proxy` (sidecar) -- Envoy service mesh proxy for traffic management.
 
 **Conditionally injected:**
@@ -175,7 +175,7 @@ Injected sidecars expect these ConfigMaps to exist in the target namespace:
 - `envoy-config` -- Envoy proxy configuration
 
 ### Security Model
-- `proxy-init` runs as **root with privileged=true** (required for iptables). This is an init container with a short lifetime.
+- `proxy-init` runs as an init container with a short lifetime (iptables setup).
 - `envoy-proxy` runs as UID 1337.
 - `client-registration` runs as UID/GID 1000.
 - `spiffe-helper` uses no explicit security context.
@@ -240,11 +240,9 @@ When removing legacy (Agent/MCPServer) webhook support:
 
 5. **Idempotency check**: `isAlreadyInjected()` checks for all four injected components (`envoy-proxy`, `spiffe-helper`, `kagenti-client-registration` in sidecar containers, `proxy-init` in init containers). If any one is found, re-admission is short-circuited.
 
-6. **proxy-init requires privileged mode**: This is intentional and documented. Kubernetes Pod Security Standards at `restricted` level will reject pods with this init container unless an exemption is configured.
+6. **ENVTEST binary path**: Tests assume envtest binaries are in `bin/k8s/`. Run `make setup-envtest` to download them before running tests from an IDE.
 
-7. **ENVTEST binary path**: Tests assume envtest binaries are in `bin/k8s/`. Run `make setup-envtest` to download them before running tests from an IDE.
-
-8. **Helm chart image tag placeholder**: `values.yaml` uses `tag: "__PLACEHOLDER__"` -- this must be overridden at install time.
+7. **Helm chart image tag placeholder**: `values.yaml` uses `tag: "__PLACEHOLDER__"` -- this must be overridden at install time.
 
 ## License
 
