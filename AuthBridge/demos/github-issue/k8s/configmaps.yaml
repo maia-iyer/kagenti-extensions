@@ -183,11 +183,6 @@ data:
                 virtual_hosts:
                 - name: local_app
                   domains: ["*"]
-                  request_headers_to_add:
-                  - header:
-                      key: "x-authbridge-direction"
-                      value: "inbound"
-                    append: false
                   routes:
                   - match:
                       prefix: "/"
@@ -195,6 +190,16 @@ data:
                       cluster: original_destination
                       timeout: 300s
               http_filters:
+              # Lua filter injects x-authbridge-direction BEFORE ext_proc runs.
+              # Route-level request_headers_to_add is applied by the router filter
+              # (last in the chain), so ext_proc would never see it.
+              - name: envoy.filters.http.lua
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+                  inline_code: |
+                    function envoy_on_request(request_handle)
+                      request_handle:headers():add("x-authbridge-direction", "inbound")
+                    end
               - name: envoy.filters.http.ext_proc
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
