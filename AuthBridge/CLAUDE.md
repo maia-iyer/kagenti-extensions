@@ -19,51 +19,33 @@ All of this happens transparently via sidecar injection -- no application code c
 ```
 AuthBridge/
 ├── AuthProxy/                        # Envoy + ext-proc sidecar (Go)
-│   ├── go-processor/
-│   │   └── main.go                   #   gRPC ext-proc: inbound validation + outbound token exchange
-│   ├── main.go                       #   Example pass-through proxy app (NOT a core component)
+│   ├── go-processor/main.go          #   gRPC ext-proc: inbound validation + outbound token exchange
 │   ├── init-iptables.sh              #   iptables setup (outbound + inbound, Istio ambient compatible)
-│   ├── entrypoint-envoy.sh           #   Starts go-processor + Envoy
-│   ├── Dockerfile                    #   auth-proxy example app image
-│   ├── Dockerfile.envoy              #   envoy-with-processor (Envoy 1.28 + go-processor)
-│   ├── Dockerfile.init               #   proxy-init (Alpine + iptables)
-│   ├── Makefile                      #   Build/deploy targets for quickstart
-│   ├── go.mod                        #   Go module (github.com/kagenti/kagenti-extensions/AuthBridge/AuthProxy)
-│   ├── k8s/                          #   Standalone K8s manifests for AuthProxy
-│   │   ├── auth-proxy-deployment.yaml
-│   │   └── go-processor-deployment.yaml
-│   └── quickstart/                   #   Standalone quickstart (no SPIFFE)
-│       ├── README.md                 #     Step-by-step tutorial
-│       ├── setup_keycloak.py         #     Creates Keycloak clients/scopes for quickstart demo
-│       ├── requirements.txt          #     python-keycloak==5.3.1
-│       ├── demo-app/
-│       │   ├── main.go               #     Target service: JWT validation on :8081, TLS echo on :8443
-│       │   └── Dockerfile
-│       └── k8s/
-│           └── demo-app-deployment.yaml
+│   ├── Dockerfile.{envoy,init}       #   Container images
+│   ├── k8s/                          #   Standalone K8s manifests
+│   └── quickstart/                   #   Standalone demo (no SPIFFE)
+│       ├── setup_keycloak.py
+│       └── demo-app/main.go          #   Test target: JWT validation (:8081), TLS echo (:8443)
 │
 ├── client-registration/              # Keycloak auto-registration (Python)
 │   ├── client_registration.py        #   Main script: register client, write secret
-│   ├── Dockerfile                    #   Python 3.12-slim, UID/GID 1000
-│   ├── requirements.txt              #   python-keycloak==5.3.1, pyjwt==2.10.1
-│   ├── README.md                     #   Detailed docs with SPIFFE/non-SPIFFE examples
-│   ├── example_deployment.yaml       #   Example without SPIFFE
-│   └── example_deployment_spiffe.yaml#   Example with SPIFFE
+│   └── Dockerfile                    #   Python 3.12-slim, UID/GID 1000
 │
-├── k8s/                              # Full AuthBridge demo manifests (with webhook)
-│   ├── authbridge-deployment.yaml    #   Full demo with SPIFFE
-│   ├── authbridge-deployment-no-spiffe.yaml  #   Full demo without SPIFFE
-│   ├── agent-deployment-webhook.yaml         #   Agent deployment (webhook injects sidecars)
-│   ├── agent-deployment-webhook-no-spiffe.yaml
-│   ├── auth-target-deployment-webhook.yaml   #   Target service deployment
-│   └── configmaps-webhook.yaml       #   All 4 required ConfigMaps for webhook injection
+├── demos/                            # Demo scenarios with full setup
+│   ├── single-target/                #   Single agent → target (SPIFFE-based)
+│   │   ├── demo.md
+│   │   ├── setup_keycloak.py
+│   │   └── k8s/                      #   Manifests including configmaps-webhook.yaml
+│   ├── multi-target/                 #   Multi-target with keycloak_sync
+│   │   └── k8s/
+│   └── github-issue/                 #   GitHub integration demo
+│       ├── demo.md, demo-manual.md
+│       ├── setup_keycloak.py
+│       └── k8s/
 │
-├── setup_keycloak.py                 # Keycloak setup for full demo (SPIFFE flow)
-├── setup_keycloak-webhook.py         # Keycloak setup for webhook-injected deployments
-├── demo.md                           # Full demo walkthrough (manual + SPIFFE)
-├── demo-webhook.md                   # Demo walkthrough for webhook-based injection
-├── README.md                         # AuthBridge overview and architecture
-└── requirements.txt                  # python-keycloak==5.3.1
+├── keycloak_sync.py                  # Declarative Keycloak sync tool (routes.yaml driven)
+├── demo-webhook.md                   # Webhook-based injection walkthrough
+└── setup_keycloak-webhook.py         # Keycloak setup for webhook deployments
 ```
 
 ## Component Details
@@ -135,50 +117,43 @@ Idempotent Python script that:
 
 **Dependencies:** `python-keycloak==5.3.1`, `pyjwt==2.10.1`
 
-### Envoy Configuration (configmaps-webhook.yaml)
+### keycloak_sync.py
 
-The `envoy-config` ConfigMap contains the full Envoy YAML with:
+Declarative Keycloak synchronization tool that maintains client scope mappings based on `routes.yaml`. Idempotent, used in multi-target demos for dynamic scope assignments.
 
-**Listeners:**
-- `outbound_listener` (port 15123):
-  - `tls_inspector` + `original_dst` listener filters
-  - TLS filter chain: `tcp_proxy` passthrough to `original_destination` cluster
-  - Raw buffer filter chain: `http_connection_manager` with ext_proc + router
-- `inbound_listener` (port 15124):
-  - `original_dst` listener filter
-  - Injects `x-authbridge-direction: inbound` request header
-  - `http_connection_manager` with ext_proc + router
+### Envoy Configuration
 
-**Clusters:**
-- `original_destination` -- ORIGINAL_DST type (routes to original IP/port)
-- `ext_proc_cluster` -- STATIC, points to localhost:9090 (go-processor), HTTP/2
+Envoy config lives in `demos/single-target/k8s/configmaps-webhook.yaml` (the `envoy-config` ConfigMap). Key listeners: `outbound_listener` (15123), `inbound_listener` (15124). Inbound listener injects `x-authbridge-direction: inbound` header. Both use ext_proc cluster pointing to localhost:9090.
 
-### Demo App (quickstart/demo-app/main.go)
+## Demo Scenarios
 
-A test target service with two servers:
-- HTTP on `:8081` -- Validates JWT (issuer, audience, signature via JWKS)
-- HTTPS on `:8443` -- Simple echo (`tls-ok`), no JWT validation, self-signed cert
+The `demos/` directory contains three demonstration scenarios:
 
-Used for testing both the token exchange (HTTP) and TLS passthrough (HTTPS) paths.
+- **single-target/** -- Primary demo showing agent → target communication with SPIFFE identity and token exchange. Recommended starting point.
+- **multi-target/** -- Dynamic scope assignment using `keycloak_sync.py` for agents communicating with multiple targets.
+- **github-issue/** -- External API integration (GitHub) using AuthBridge for transparent authentication.
 
 ## Keycloak Setup Scripts
 
-There are **three** setup scripts for different scenarios:
+There are **four** setup scripts for different demo scenarios:
 
 | Script | Location | Use Case |
 |--------|----------|----------|
-| `setup_keycloak.py` | `AuthBridge/` | Full SPIFFE demo (creates realm, auth-target client, agent-spiffe-aud scope, alice user) |
-| `setup_keycloak-webhook.py` | `AuthBridge/` | Webhook-injected deployments (parameterized namespace/SA) |
-| `setup_keycloak.py` | `AuthBridge/AuthProxy/quickstart/` | Standalone AuthProxy quickstart (creates application-caller, authproxy, demoapp clients) |
+| `setup_keycloak.py` | `AuthBridge/demos/single-target/` | Single-target SPIFFE demo (creates realm, auth-target client, agent-spiffe-aud + auth-target-aud scopes, alice user) |
+| `setup_keycloak.py` | `AuthBridge/demos/github-issue/` | GitHub issue integration demo (creates github-tool client, github-tool-aud + github-full-access scopes, alice + bob users) |
+| `setup_keycloak-webhook.py` | `AuthBridge/` | Webhook-injected deployments (parameterized namespace/SA, creates same resources as single-target with dynamic SPIFFE ID) |
+| `setup_keycloak.py` | `AuthBridge/AuthProxy/quickstart/` | Standalone AuthProxy quickstart without SPIFFE (creates application-caller, authproxy, demoapp clients with per-client scope assignment) |
 
 **Common Keycloak defaults across all scripts:**
 - URL: `http://keycloak.localtest.me:8080`
 - Realm: `demo`
 - Admin: `admin` / `admin`
 
+**Note:** All scripts share the same helper function patterns (`get_or_create_realm`, `get_or_create_client`, `get_or_create_client_scope`, etc.) and are idempotent.
+
 ## Required ConfigMaps for Webhook Injection
 
-When the kagenti-webhook injects sidecars, four ConfigMaps must exist in the target namespace. All are defined in `k8s/configmaps-webhook.yaml`:
+When the kagenti-webhook injects sidecars, four ConfigMaps must exist in the target namespace. All are defined in `demos/single-target/k8s/configmaps-webhook.yaml`:
 
 | ConfigMap | Consumer | Key Fields |
 |-----------|----------|------------|
@@ -217,15 +192,13 @@ make deploy
 make undeploy
 ```
 
-### Full Demo with Webhook
+### Full Demo with Webhook (Single Target)
 
 ```bash
 # 1. Setup Keycloak (requires port-forward to Keycloak)
-cd AuthBridge
-pip install -r requirements.txt
-python setup_keycloak.py            # For SPIFFE demo
-# or
-python setup_keycloak-webhook.py    # For webhook-injected demo
+cd AuthBridge/demos/single-target
+pip install -r ../../requirements.txt
+python setup_keycloak.py            # Creates realm, auth-target client, scopes, alice user
 
 # 2. Apply ConfigMaps to target namespace
 kubectl apply -f k8s/configmaps-webhook.yaml -n <namespace>
@@ -299,7 +272,7 @@ kubectl apply -f k8s/authbridge-deployment-no-spiffe.yaml # Without SPIFFE
 - All scripts use `python-keycloak` library (KeycloakAdmin class)
 
 ### Changing Envoy Configuration
-- Edit the `envoy.yaml` section in `k8s/configmaps-webhook.yaml`
+- Edit the `envoy.yaml` section in `demos/single-target/k8s/configmaps-webhook.yaml` (or the appropriate demo's configmaps file)
 - Key listener/cluster names: `outbound_listener`, `inbound_listener`, `original_destination`, `ext_proc_cluster`
 - After changes, re-apply the ConfigMap and restart pods
 
@@ -315,9 +288,9 @@ kubectl apply -f k8s/authbridge-deployment-no-spiffe.yaml # Without SPIFFE
 
 5. **Virtualenv directory**: For local development you may create `AuthProxy/quickstart/venv/`, but it should be gitignored and is not committed to the repo.
 
-6. **Demo SPIFFE ID is hardcoded**: `setup_keycloak.py` hardcodes `AGENT_SPIFFE_ID = "spiffe://localtest.me/ns/authbridge/sa/agent"`. Change this if using a different namespace/SA.
+6. **Demo SPIFFE ID is hardcoded**: `demos/single-target/setup_keycloak.py` hardcodes `AGENT_SPIFFE_ID = "spiffe://localtest.me/ns/authbridge/sa/agent"`. Change this if using a different namespace/SA.
 
-7. **Admin credentials in ConfigMap**: `configmaps-webhook.yaml` stores Keycloak admin credentials in a ConfigMap (not a Secret). This is for demo only -- production should use Kubernetes Secrets.
+7. **Admin credentials in ConfigMap**: `demos/single-target/k8s/configmaps-webhook.yaml` stores Keycloak admin credentials in a ConfigMap (not a Secret). This is for demo only -- production should use Kubernetes Secrets.
 
 8. **Envoy Lua filter required for inbound**: The `x-authbridge-direction: inbound` header MUST be injected via a Lua filter before ext_proc in the inbound listener. Route-level `request_headers_to_add` does NOT work because the router filter runs after ext_proc.
 
