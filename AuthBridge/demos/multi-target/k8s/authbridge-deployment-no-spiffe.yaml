@@ -21,6 +21,8 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: authbridge
+  labels:
+    istio.io/dataplane-mode: ambient
 
 ---
 apiVersion: v1
@@ -195,9 +197,9 @@ spec:
     metadata:
       labels:
         app: caller
-        istio.io/dataplane-mode: none
+        # istio.io/dataplane-mode: none
       annotations:
-        ambient.istio.io/redirection: disabled
+        # ambient.istio.io/redirection: disabled
         sidecar.istio.io/inject: "false"
     spec:
       serviceAccountName: caller
