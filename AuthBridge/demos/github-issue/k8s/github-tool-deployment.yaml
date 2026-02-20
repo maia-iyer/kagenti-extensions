@@ -1,8 +1,8 @@
 # GitHub Tool (MCP Server) Deployment
 #
 # This is the GitHub MCP tool that provides GitHub API access.
-# It does NOT have AuthBridge injection enabled (kagenti.io/inject: disabled)
-# because it is the target service, not the caller.
+# It does NOT have AuthBridge injection — the kagenti.io/type label is omitted
+# so the webhook pre-filter skips it entirely.
 #
 # The tool validates incoming tokens to determine authorization level:
 #   - Tokens with "github-full-access" scope → uses PRIVILEGED_ACCESS_PAT
@@ -30,8 +30,6 @@ metadata:
   namespace: team1
   labels:
     app: github-tool
-    kagenti.io/type: tool
-    kagenti.io/inject: disabled
 spec:
   replicas: 1
   selector:
@@ -41,8 +39,6 @@ spec:
     metadata:
       labels:
         app: github-tool
-        kagenti.io/type: tool
-        kagenti.io/inject: disabled
     spec:
       containers:
         - name: github-tool
