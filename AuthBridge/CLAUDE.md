@@ -19,70 +19,33 @@ All of this happens transparently via sidecar injection -- no application code c
 ```
 AuthBridge/
 ├── AuthProxy/                        # Envoy + ext-proc sidecar (Go)
-│   ├── go-processor/
-│   │   ├── main.go                   #   gRPC ext-proc: inbound validation + outbound token exchange
-│   │   └── internal/                 #   Internal packages
-│   ├── main.go                       #   Example pass-through proxy app (NOT a core component)
+│   ├── go-processor/main.go          #   gRPC ext-proc: inbound validation + outbound token exchange
 │   ├── init-iptables.sh              #   iptables setup (outbound + inbound, Istio ambient compatible)
-│   ├── entrypoint-envoy.sh           #   Starts go-processor + Envoy
-│   ├── Dockerfile                    #   auth-proxy example app image
-│   ├── Dockerfile.envoy              #   envoy-with-processor (Envoy 1.28 + go-processor)
-│   ├── Dockerfile.init               #   proxy-init (Alpine + iptables)
-│   ├── Makefile                      #   Build/deploy targets for quickstart
-│   ├── go.mod                        #   Go module (github.com/kagenti/kagenti-extensions/AuthBridge/AuthProxy)
-│   ├── README.md                     #   AuthProxy overview
-│   ├── k8s/                          #   Standalone K8s manifests for AuthProxy
-│   │   ├── auth-proxy-deployment.yaml
-│   │   └── go-processor-deployment.yaml
-│   └── quickstart/                   #   Standalone quickstart (no SPIFFE)
-│       ├── README.md                 #     Step-by-step tutorial
-│       ├── setup_keycloak.py         #     Creates Keycloak clients/scopes for quickstart demo
-│       ├── requirements.txt          #     python-keycloak==5.3.1
-│       ├── demo-app/
-│       │   ├── main.go               #     Target service: JWT validation on :8081, TLS echo on :8443
-│       │   └── Dockerfile
-│       └── k8s/
-│           └── demo-app-deployment.yaml
+│   ├── Dockerfile.{envoy,init}       #   Container images
+│   ├── k8s/                          #   Standalone K8s manifests
+│   └── quickstart/                   #   Standalone demo (no SPIFFE)
+│       ├── setup_keycloak.py
+│       └── demo-app/main.go          #   Test target: JWT validation (:8081), TLS echo (:8443)
 │
 ├── client-registration/              # Keycloak auto-registration (Python)
 │   ├── client_registration.py        #   Main script: register client, write secret
-│   ├── Dockerfile                    #   Python 3.12-slim, UID/GID 1000
-│   ├── requirements.txt              #   python-keycloak==5.3.1, pyjwt==2.10.1
-│   ├── README.md                     #   Detailed docs with SPIFFE/non-SPIFFE examples
-│   ├── example_deployment.yaml       #   Example without SPIFFE
-│   ├── example_deployment_spiffe.yaml#   Example with SPIFFE
-│   └── images/                       #   Architecture diagrams
+│   └── Dockerfile                    #   Python 3.12-slim, UID/GID 1000
 │
 ├── demos/                            # Demo scenarios with full setup
-│   ├── single-target/                #   Single agent → single target demo (SPIFFE-based)
-│   │   ├── demo.md                   #     Full walkthrough (manual + SPIFFE)
-│   │   ├── setup_keycloak.py         #     Creates auth-target client, scopes, alice user
-│   │   └── k8s/                      #     K8s manifests
-│   │       ├── authbridge-deployment.yaml
-│   │       ├── authbridge-deployment-no-spiffe.yaml
-│   │       ├── agent-deployment-webhook.yaml
-│   │       ├── agent-deployment-webhook-no-spiffe.yaml
-│   │       ├── auth-target-deployment-webhook.yaml
-│   │       └── configmaps-webhook.yaml
-│   ├── multi-target/                 #   Multi-target demo with keycloak_sync
-│   │   ├── demo.md                   #     Walkthrough for multiple targets
-│   │   └── k8s/                      #     K8s manifests
-│   │       ├── alice-deployment.yaml
-│   │       ├── bob-deployment.yaml
-│   │       └── configmaps.yaml
-│   └── github-issue/                 #   GitHub issue integration demo
-│       ├── demo.md                   #     Automated demo walkthrough
-│       ├── demo-manual.md            #     Manual demo walkthrough
-│       ├── setup_keycloak.py         #     Creates github-tool client, scopes, users
-│       └── k8s/                      #     K8s manifests
-│           ├── github-tool-deployment.yaml
-│           └── configmaps.yaml
+│   ├── single-target/                #   Single agent → target (SPIFFE-based)
+│   │   ├── demo.md
+│   │   ├── setup_keycloak.py
+│   │   └── k8s/                      #   Manifests including configmaps-webhook.yaml
+│   ├── multi-target/                 #   Multi-target with keycloak_sync
+│   │   └── k8s/
+│   └── github-issue/                 #   GitHub integration demo
+│       ├── demo.md, demo-manual.md
+│       ├── setup_keycloak.py
+│       └── k8s/
 │
 ├── keycloak_sync.py                  # Declarative Keycloak sync tool (routes.yaml driven)
-├── demo-webhook.md                   # Demo walkthrough for webhook-based injection
-├── setup_keycloak-webhook.py         # Keycloak setup for webhook-injected deployments
-├── README.md                         # AuthBridge overview and architecture
-└── requirements.txt                  # python-keycloak==5.3.1
+├── demo-webhook.md                   # Webhook-based injection walkthrough
+└── setup_keycloak-webhook.py         # Keycloak setup for webhook deployments
 ```
 
 ## Component Details
@@ -156,92 +119,19 @@ Idempotent Python script that:
 
 ### keycloak_sync.py
 
-A declarative Keycloak synchronization tool that maintains Keycloak client scope mappings based on a YAML configuration file (`routes.yaml`).
+Declarative Keycloak synchronization tool that maintains client scope mappings based on `routes.yaml`. Idempotent, used in multi-target demos for dynamic scope assignments.
 
-**Key features:**
-- Reads `routes.yaml` to determine which client needs which scopes
-- Idempotent: only makes changes when state differs from desired config
-- Uses helper functions from setup scripts for client/scope operations
-- Commonly used in multi-target demos where agents need dynamic scope assignments
+### Envoy Configuration
 
-**Configuration format (routes.yaml):**
-```yaml
-routes:
-  - client: agent-a
-    scopes:
-      - target-service-aud
-      - another-scope-aud
-```
-
-### Envoy Configuration (demos/single-target/k8s/configmaps-webhook.yaml)
-
-The `envoy-config` ConfigMap contains the full Envoy YAML with:
-
-**Listeners:**
-- `outbound_listener` (port 15123):
-  - `tls_inspector` + `original_dst` listener filters
-  - TLS filter chain: `tcp_proxy` passthrough to `original_destination` cluster
-  - Raw buffer filter chain: `http_connection_manager` with ext_proc + router
-- `inbound_listener` (port 15124):
-  - `original_dst` listener filter
-  - Injects `x-authbridge-direction: inbound` request header
-  - `http_connection_manager` with ext_proc + router
-
-**Clusters:**
-- `original_destination` -- ORIGINAL_DST type (routes to original IP/port)
-- `ext_proc_cluster` -- STATIC, points to localhost:9090 (go-processor), HTTP/2
-
-### Demo App (quickstart/demo-app/main.go)
-
-A test target service with two servers:
-- HTTP on `:8081` -- Validates JWT (issuer, audience, signature via JWKS)
-- HTTPS on `:8443` -- Simple echo (`tls-ok`), no JWT validation, self-signed cert
-
-Used for testing both the token exchange (HTTP) and TLS passthrough (HTTPS) paths.
+Envoy config lives in `demos/single-target/k8s/configmaps-webhook.yaml` (the `envoy-config` ConfigMap). Key listeners: `outbound_listener` (15123), `inbound_listener` (15124). Inbound listener injects `x-authbridge-direction: inbound` header. Both use ext_proc cluster pointing to localhost:9090.
 
 ## Demo Scenarios
 
-The `demos/` directory contains three complete demonstration scenarios, each with its own setup scripts, K8s manifests, and walkthrough documentation:
+The `demos/` directory contains three demonstration scenarios:
 
-### demos/single-target/
-The primary demo showing agent → target communication with SPIFFE identity and token exchange. This is the recommended starting point for understanding AuthBridge.
-
-**Contents:**
-- `demo.md` -- Full walkthrough with manual and SPIFFE-based flows
-- `setup_keycloak.py` -- Creates `auth-target` client, `agent-spiffe-aud` + `auth-target-aud` scopes, `alice` user
-- `k8s/` -- All manifests including webhook-based deployments and configmaps
-
-**Key concepts demonstrated:**
-- SPIFFE ID-based client registration
-- Inbound JWT validation
-- Outbound token exchange (RFC 8693)
-- Webhook-based sidecar injection
-
-### demos/multi-target/
-Demonstrates dynamic scope assignment for agents communicating with multiple targets using `keycloak_sync.py`.
-
-**Contents:**
-- `demo.md` -- Walkthrough for multi-target scenarios
-- `k8s/` -- Manifests for multiple agent/target deployments (alice, bob)
-
-**Key concepts demonstrated:**
-- Dynamic scope management via `keycloak_sync.py` + `routes.yaml`
-- Multiple agents with different access patterns
-- Declarative Keycloak state management
-
-### demos/github-issue/
-Shows integration with external APIs (GitHub) using AuthBridge for transparent authentication.
-
-**Contents:**
-- `demo.md` -- Automated demo walkthrough
-- `demo-manual.md` -- Manual step-by-step instructions
-- `setup_keycloak.py` -- Creates `github-tool` client, `github-tool-aud` + `github-full-access` scopes, `alice` + `bob` users
-- `k8s/` -- Manifests for GitHub integration demo
-
-**Key concepts demonstrated:**
-- External API integration via token exchange
-- Service-to-service authentication patterns
-- Multi-user scenarios (alice, bob)
+- **single-target/** -- Primary demo showing agent → target communication with SPIFFE identity and token exchange. Recommended starting point.
+- **multi-target/** -- Dynamic scope assignment using `keycloak_sync.py` for agents communicating with multiple targets.
+- **github-issue/** -- External API integration (GitHub) using AuthBridge for transparent authentication.
 
 ## Keycloak Setup Scripts
 
